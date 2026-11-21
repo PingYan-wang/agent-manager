@@ -721,17 +721,17 @@ async function pullTail(model) {
 }
 
 const routerMgmtRoutes = [
-  ['GET', /^\/api\/router\/config$/, async () => {
+  ['GET', /^\/api\/router\/config$/, async (req, res) => {
     const c = await readRouterConfig();
-    if (!c) return json({ error: 'router config not found' }, 500);
-    return json({ config: maskConfig(c) });
+    if (!c) return json(res, 500, { error: 'router config not found' });
+    return json(res, 200, { config: maskConfig(c) });
   }],
   ['PUT', /^\/api\/router\/config$/, async (req, res) => {
     let incoming;
-    try { incoming = JSON.parse(await readBody(req)); } catch { return json({ error: 'invalid json' }, 400); }
-    if (!incoming || typeof incoming.routes !== 'object' || !Object.keys(incoming.routes).length) return json({ error: 'routes 不能为空' }, 400);
+    try { incoming = JSON.parse(await readBody(req)); } catch { return json(res, 400, { error: 'invalid json' }); }
+    if (!incoming || typeof incoming.routes !== 'object' || !Object.keys(incoming.routes).length) return json(res, 400, { error: 'routes 不能为空' });
     for (const [n, r] of Object.entries(incoming.routes)) {
-      if (!r || typeof r.model !== 'string' || !r.model.trim()) return json({ error: `路由 ${n} 缺少 model` }, 400);
+      if (!r || typeof r.model !== 'string' || !r.model.trim()) return json(res, 400, { error: `路由 ${n} 缺少 model` });
       r.fallbacks = Array.isArray(r.fallbacks) ? r.fallbacks.filter(f => f && f.model) : [];
     }
     const old = (await readRouterConfig()) || {};
@@ -741,33 +741,33 @@ const routerMgmtRoutes = [
     await writeFile(ROUTER_CFG, JSON.stringify(incoming, null, 2));
     let reloaded = await reloadRouter();
     if (!reloaded) { try { execFile('/bin/launchctl', ['kickstart', '-k', 'gui/501/ai.hermes.router']); } catch {} }
-    return json({ ok: true, reloaded });
+    return json(res, 200, { ok: true, reloaded });
   }],
-  ['GET', /^\/api\/router\/classifier\/models$/, async () => {
+  ['GET', /^\/api\/router\/classifier\/models$/, async (req, res) => {
     const c = await readRouterConfig();
-    if (!c) return json({ providers: [] });
+    if (!c) return json(res, 200, { providers: [] });
     const seen = new Map();
     const add = (u, k) => { if (u && !seen.has(u)) seen.set(u, k || ''); };
     for (const r of Object.values(c.routes || {})) { add(r.baseUrl, r.apiKey); for (const f of r.fallbacks || []) add(f.baseUrl, f.apiKey); }
     const cc = c.classifier || {}; add(cc.baseUrl, cc.apiKey);
     const providers = await Promise.all([...seen.entries()].slice(0, 8).map(([u, k]) => probeModels(u, k)));
-    return json({ providers });
+    return json(res, 200, { providers });
   }],
-  ['GET', /^\/api\/router\/local-models$/, async () => {
+  ['GET', /^\/api\/router\/local-models$/, async (req, res) => {
     const pulls = {};
     for (const [m] of LOCAL_PULLS) pulls[m] = { status: LOCAL_PULLS.get(m).status, tail: await pullTail(m) };
     try {
       const r = await fetch('http://127.0.0.1:11434/api/tags', { signal: AbortSignal.timeout(4000) });
       const j = await r.json();
-      return json({ models: (j.models || []).map(m => m.name), pulls });
-    } catch { return json({ models: [], pulls, error: 'ollama offline' }); }
+      return json(res, 200, { models: (j.models || []).map(m => m.name), pulls });
+    } catch { return json(res, 200, { models: [], pulls, error: 'ollama offline' }); }
   }],
   ['POST', /^\/api\/router\/local-models\/pull$/, async (req, res) => {
     let body = {};
     try { body = JSON.parse(await readBody(req) || '{}'); } catch {}
     const model = String(body.model || '').trim();
-    if (!/^[a-zA-Z0-9._:-]{2,80}$/.test(model)) return json({ error: 'invalid model name' }, 400);
-    if (LOCAL_PULLS.has(model)) return json({ ok: true, status: LOCAL_PULLS.get(model).status });
+    if (!/^[a-zA-Z0-9._:-]{2,80}$/.test(model)) return json(res, 400, { error: 'invalid model name' });
+    if (LOCAL_PULLS.has(model)) return json(res, 200, { ok: true, status: LOCAL_PULLS.get(model).status });
     const safe = model.replace(/[^a-zA-Z0-9._-]/g, '_');
     const log = path.join(DATA_DIR, `ollama-pull-${safe}.log`);
     LOCAL_PULLS.set(model, { status: 'pulling', log });
@@ -777,11 +777,11 @@ const routerMgmtRoutes = [
     const child = spawn(OLLAMA_BIN, ['pull', model], { stdio: ['ignore', out, out] });
     child.on('close', (code) => { const s = LOCAL_PULLS.get(model); if (s) { s.status = code === 0 ? 'done' : 'error'; s.code = code; } out.end(); });
     child.on('error', (e) => { const s = LOCAL_PULLS.get(model); if (s) { s.status = 'error'; s.error = String(e.message); } out.end(); });
-    return json({ ok: true, status: 'pulling' });
+    return json(res, 200, { ok: true, status: 'pulling' });
   }],
-  ['GET', /^\/api\/router\/agent-apply$/, async () => {
+  ['GET', /^\/api\/router\/agent-apply$/, async (req, res) => {
     const f = (await readJson(APPLY_FILE)) || { enabled: true };
-    return json({ enabled: !!f.enabled });
+    return json(res, 200, { enabled: !!f.enabled });
   }],
   ['PUT', /^\/api\/router\/agent-apply$/, async (req, res) => {
     let body = {};
@@ -789,9 +789,9 @@ const routerMgmtRoutes = [
     const enabled = !!body.enabled;
     await mkdir(DATA_DIR, { recursive: true });
     await writeFile(APPLY_FILE, JSON.stringify({ enabled }));
-    return json({ ok: true, enabled });
+    return json(res, 200, { ok: true, enabled });
   }],
-  ['GET', /^\/api\/router\/agents$/, async () => {
+  ['GET', /^\/api\/router\/agents$/, async (req, res) => {
     const agents = [];
     try {
       const y = await readFile(path.join(HOME, '.hermes', 'config.yaml'), 'utf8');
@@ -801,33 +801,32 @@ const routerMgmtRoutes = [
       agents.push({ id: 'hermes', name: 'Hermes 桌面端', applied: def === 'auto' && base.includes(':8788'), detail: `model=${def} provider=${prov} → ${base}` });
     } catch { agents.push({ id: 'hermes', name: 'Hermes 桌面端', applied: false, error: 'config.yaml 未找到' }); }
     for (const [id, name] of [['workbuddy', 'WorkBuddy'], ['devin', 'Devin CLI'], ['codex', 'Codex CLI']]) agents.push({ id, name, applied: false, manual: true, hint: '手动将其 LLM Base URL 指向自动路由入口' });
-    return json({ agents, proxyUrl: 'http://127.0.0.1:3100/px/router/v1', directUrl: 'http://127.0.0.1:8788/v1' });
+    return json(res, 200, { agents, proxyUrl: 'http://127.0.0.1:3100/px/router/v1', directUrl: 'http://127.0.0.1:8788/v1' });
   }],
   ['POST', /^\/api\/router\/agents\/apply$/, async (req, res) => {
     let body = {};
     try { body = JSON.parse(await readBody(req) || '{}'); } catch {}
-    if (body.agent !== 'hermes') return json({ error: '该 Agent 需手动接入' }, 400);
+    if (body.agent !== 'hermes') return json(res, 400, { error: '该 Agent 需手动接入' });
     const f = (await readJson(APPLY_FILE)) || { enabled: true };
-    if (!f.enabled) return json({ error: '一键接入开关已关闭' }, 403);
+    if (!f.enabled) return json(res, 403, { error: '一键接入开关已关闭' });
     const cfgPath = path.join(HOME, '.hermes', 'config.yaml');
     let y = '';
-    try { y = await readFile(cfgPath, 'utf8'); } catch { return json({ error: 'config.yaml 未找到' }, 500); }
+    try { y = await readFile(cfgPath, 'utf8'); } catch { return json(res, 500, { error: 'config.yaml 未找到' }); }
     const applied = /base_url:\s*http:\/\/127\.0\.0\.1:8788\/v1/.test(y) && /^\s*default:\s*auto$/m.test(y);
-    if (applied) return json({ ok: true, already: true });
-    const PROVIDER_BLOCK = 'custom_providers:\n  - name: hermes-auto\n    base_url: http://127.0.0.1:8788/v1\n    api_key: hermes-local-router\n    model: auto\n    context_length: 131072\n    models:\n      auto: {}\n      simple: {}\n      coding: {}\n      complex: {}\n      expert: {}\n    models_discovered: true\n';
+    if (applied) return json(res, 200, { ok: true, already: true });
     const ENTRY = '  - name: hermes-auto\n    base_url: http://127.0.0.1:8788/v1\n    api_key: hermes-local-router\n    model: auto\n    context_length: 131072\n    models:\n      auto: {}\n      simple: {}\n      coding: {}\n      complex: {}\n      expert: {}\n    models_discovered: true\n';
     let next = y;
     if (/custom_providers:/.test(next)) {
       if (!/hermes-auto/.test(next)) next = next.replace(/(custom_providers:\s*\n)/, '$1' + ENTRY);
     } else {
-      next += '\n' + PROVIDER_BLOCK;
+      next += '\ncustom_providers:\n' + ENTRY;
     }
     if (/^model:\n  default: \S+\n  provider: \S+/m.test(next)) next = next.replace(/^model:\n  default: \S+\n  provider: \S+/m, 'model:\n  default: auto\n  provider: hermes-auto');
     else if (/^model:\n  default: \S+/m.test(next)) next = next.replace(/^model:\n  default: \S+/m, 'model:\n  default: auto\n  provider: hermes-auto');
     else next = 'model:\n  default: auto\n  provider: hermes-auto\n' + next;
     await writeFile(cfgPath + '.bak-apply-' + Date.now(), y);
     await writeFile(cfgPath, next);
-    return json({ ok: true, note: '已写入 Hermes 配置，重启 Hermes 桌面端后生效' });
+    return json(res, 200, { ok: true, note: '已写入 Hermes 配置，重启 Hermes 桌面端后生效' });
   }],
 ];
 

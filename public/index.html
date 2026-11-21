@@ -447,12 +447,11 @@ async function loadAgents(){
       ${a.cli?`<tr><td>CLI</td><td>${a.cliPath?'<span class="badge on">可用</span>':'<span class="badge off">未找到</span>'}</td><td class="path">${esc(a.cliPath||a.cli)}</td></tr>`:''}
       <tr><td>进程</td><td>${a.running?'<span class="badge on">运行中</span>':'<span class="badge">未运行</span>'}</td><td class="muted">—</td></tr>
       <tr><td>MCPHub</td><td>${a.mcphub?'<span class="badge on">已接入</span>':'<span class="badge warn">未接入</span>'}</td><td class="path">${esc(gw.endpoint||'')}</td></tr></table>`;
-    const mcpInner = a.mcpServers.length ? `<table class="mini-table"><tr><th>名称</th><th>类型</th><th>状态</th><th>地址/命令</th><th></th></tr>` + a.mcpServers.map(s=>{
+    const mcpInner = a.mcpServers.length ? `<table class="mini-table"><tr><th>名称</th><th>类型</th><th>地址/命令</th><th></th></tr>` + a.mcpServers.map(s=>{
       const st = mcpStatus(a, s);
       return `
       <tr><td class="mono">${esc(s.name)}</td>
-      <td><span class="badge">${esc(s.transport||s.kind)}</span></td>
-      <td><span class="badge ${st.cls}">${st.txt}</span></td>
+      <td><span class="badge ${st.cls}">${esc(s.transport||s.kind)}</span></td>
       <td class="path">${esc(s.url||[s.command,(s.args||[]).join(' ')].filter(Boolean).join(' '))}</td>
       <td>${s.kind==='http'&&!s.disabled?`<button class="ghost" data-act="import-mcp" data-agent="${a.id}" data-name="${esc(s.name)}">导入</button>`:''}</td></tr>`;
     }).join('') + '</table>'
