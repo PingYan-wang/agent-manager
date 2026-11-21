@@ -35,7 +35,7 @@
 
 | 痛点 | 没有 Agent Manager | 有 Agent Manager |
 |---|---|---|
-| 换 Agent 要重讲背景 | 每个 Agent 只看得到自己的对话 | 任一 Agent 可搜索、读取其他 Agent 的会话和共享记忆 |
+| 换 Agent 要重讲背景 | 每个 Agent 只看得到自己的对话 | 任一 Agent 可搜索、读取当前或其他 Agent 的会话和共享记忆 |
 | 同一件事反复踩坑 | A 对话配好了生图，B 对话从零再来 | B 通过 MCPHub 直接调用 A 沉淀下来的工具，复现 A 的路径 |
 | 工具配置孤岛 | MCP / Skill 每个 Agent 各装一遍 | 自动导入 MCPHub 网关、Skill 同步到所有 Agent |
 | 模型成本失控 | 闲聊也按旗舰模型计费 | 分类器分级路由 + 每日预算熔断 |
