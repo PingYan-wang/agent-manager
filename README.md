@@ -4,7 +4,7 @@
 
 <h1 align="center">Agent Manager</h1>
 
-<p align="center"><b>本机多 Agent 统一管理 + LLM 智能路由网关 + MCP/Skill 生态同步</b>（macOS · 中文 Web UI · 零依赖 Node.js）</p>
+<p align="center"><b>让本机所有 AI Agent 共享工具、共享记忆、共享模型路由</b><br/>多 Agent 统一管理 · 跨 Agent 记忆继承 · MCPHub 路径复用 · LLM 智能路由 · 任务编排 loop</p>
 
 <p align="center">
   <img src="https://img.shields.io/badge/license-MIT-blue" alt="license"/>
@@ -17,99 +17,108 @@
 
 <table>
 <tr><td align="center" width="25%">
-<b>🧭 智能路由</b><br/>LLM 分级分流，简单走便宜模型，复杂才上旗舰
+<b>🧠 跨 Agent 记忆</b><br/>换个 Agent 不用重讲，会话与结论全员可查
 </td><td align="center" width="25%">
-<b>🔀 统一反代</b><br/>一个入口聚合所有 Agent 与 LLM 上游，SSE 流式透传
+<b>♻️ 路径复用</b><br/>一个对话摸索出的做法，经 MCPHub 沉淀为全员能力
 </td><td align="center" width="25%">
-<b>🎼 任务编排</b><br/>拆解→子 Agent 执行→验收返工→人工裁决→自动续步 loop
+<b>🧭 智能路由</b><br/>简单问题走便宜模型，复杂任务才上旗舰
 </td><td align="center" width="25%">
-<b>💰 成本可控</b><br/>预算熔断 + 用量下钻 + 每日巡检日报，花费全透明
+<b>🌳 任务编排</b><br/>子 Agent 池 + 执行树 + 失败自愈 + 自动续步
 </td></tr>
 </table>
 
-> 一句话：让你电脑上所有 AI Agent（Hermes / WorkBuddy / Codex / Devin / Windsurf / Claude …）共用一套 **MCP 工具、Skill 技能库和 LLM 智能路由**——**简单问题走便宜模型，复杂任务才上贵模型，每一分钱花在刀刃上**。
+> 你电脑上的 Hermes、WorkBuddy、Codex、Devin、Windsurf、Claude……各自有一套 MCP、Skill、会话和模型配置，互不相通。**Agent Manager 把它们连成一个整体**：工具装一次全员可用，对话聊一次全员可查，做法摸索一次全员复用，每个请求自动挑最合适（也最省钱）的模型。
 
 ---
 
-## 它解决什么问题
+## 为什么需要它
 
-现代 AI 工作流常见的三个痛点：
-
-1. **模型订阅碎片化**：DeepSeek、Kimi、Claude、GPT、Gemini 各自为政，手动切换、手动挑模型，又贵又费事
-2. **成本失控**：所有请求默认走最强（也最贵）的模型，闲聊也按 Opus 价格计费
-3. **Agent 配置孤岛**：MCP、Skill、会话记录散落在各家目录里，换工具就要重新配置
-
-Agent Manager 用一个本地 Web 面板把这些全部收拢：
+| 痛点 | 没有 Agent Manager | 有 Agent Manager |
+|---|---|---|
+| 换 Agent 要重讲背景 | 每个 Agent 只看得到自己的对话 | 任一 Agent 可搜索、读取其他 Agent 的会话和共享记忆 |
+| 同一件事反复踩坑 | A 对话配好了生图，B 对话从零再来 | B 通过 MCPHub 直接调用 A 沉淀下来的工具，复现 A 的路径 |
+| 工具配置孤岛 | MCP / Skill 每个 Agent 各装一遍 | 自动导入 MCPHub 网关、Skill 同步到所有 Agent |
+| 模型成本失控 | 闲聊也按旗舰模型计费 | 分类器分级路由 + 每日预算熔断 |
+| 长任务没人盯 | 手动拆解、手动派发、手动验收 | 编排器拆解→子 Agent 并行→验收返工→自动续步 |
 
 ![Agent Manager 架构图](docs/assets/architecture.png)
 
 ---
 
-## 核心功能
+## 功能一览
 
-### 🧭 LLM 智能路由（本项目的招牌）
+| 功能 | 一句话 | 详细文档 |
+|---|---|---|
+| 🧠 **跨 Agent 对话与记忆继承** | 任一 Agent 可搜索 / 读取其他 Agent 的会话，结论写入共享记忆库 | [cross-agent-memory.md](docs/cross-agent-memory.md) |
+| ♻️ **MCPHub 网关与路径复用** | 所有 MCP 汇入一个网关；一个对话的实现路径沉淀为全员能力 | [mcp-gateway.md](docs/mcp-gateway.md) |
+| 🧩 **Skill 统一同步** | Skill 装一次铺到所有 Agent，市场一键安装 | [skills.md](docs/skills.md) |
+| 🧭 **LLM 智能路由** | simple / coding / complex / expert 分级分流，会话粘性，预算熔断 | [routing.md](docs/routing.md) |
+| 🔀 **反向代理 / 统一入口** | 一个入口聚合所有本地服务与 LLM 上游，SSE 流式透传 | [proxy.md](docs/proxy.md) |
+| 🌳 **多 Agent 任务编排** | 子 Agent 池、跨 Client 调度、执行树、失败自愈、自动续步 loop | [orchestration.md](docs/orchestration.md) |
+| 📊 **用量看板与巡检日报** | 用量下钻、服务商视图、7 天趋势、每日自动体检 | [dashboard.md](docs/dashboard.md) |
 
-一个 OpenAI 兼容的本地代理（默认 `127.0.0.1:8788`），每个请求先由**分类器**判断任务等级，再路由到对应上游：
+---
 
-| 路由 | 适用场景 | 默认模型 | 成本 |
-|---|---|---|---|
-| `simple` | 闲聊、问答、翻译、天气新闻 | deepseek-v4.1-flash | 极低 |
-| `coding` | 写代码、跑命令、文件操作、MCP 工具调用 | kimi-k3.1-pro | 订阅额度内 |
-| `complex` | 架构设计、复杂分析、规划 | claude-opus-5-5 | 按量 |
-| `expert` | 手动指定的最高难度任务 | claude-fable-5-2 | 按量 |
+## 亮点
 
-<p align="center"><img src="docs/screenshots/router.png" width="760" alt="自动路由面板"/></p>
+### 🧠 跨 Agent 对话与记忆继承
 
-- **分类器双模式**：云端小模型（默认，复用已有上游，零部署）或本地 Ollama 小模型（UI 一键下载 `ollama pull`，完全离线）
-- **会话粘性**：同一会话内的追问（"继续/好的/ok…"）不降级，保持同一模型，保住 prompt 缓存、不丢上下文
-- **工具意图关键词覆盖**：提醒/邮件/PDF/截图等任务直接确定性路由到 coding，不依赖分类器猜
-- **多级 fallback**：主模型失败自动依次尝试备选链，可跨上游混合
-- **预算熔断**：按上游 host 设置每日预算（USD 或请求数），超限自动跳过走兜底——**按量计费上游永不失控**
-- **热重载**：Web UI 改配置即时生效，无需重启；API Key 脱敏显示、留空不覆盖
-- **Agent 一键接入**：一键把 Hermes 等 Agent 切到 `model=auto`，其他 Agent 填统一入口即可；总开关可关
+内置 MCP server **agent-bridge**，自动注册进网关，所有 Agent 都能调用：
 
-### 🔀 反向代理 / 统一入口
+```text
+用户 → Codex：接着 Hermes 昨天讨论的数据库迁移方案继续
+Codex → conversations_search("数据库迁移")       # 搜遍全部 Agent 的会话
+Codex → conversation_read(agent="hermes", id=…)  # 读到完整上下文，直接接着做
+```
 
-内置 `/px/<id>/` 前缀反代（HTTP + WebSocket，SSE 流式透传）：
+支持同系统（自己的历史会话）与跨系统（Hermes / Devin / Codex / WorkBuddy 互读），以及 `memory_save` / `memory_search` 共享记忆库。→ [详细说明](docs/cross-agent-memory.md)
 
-<p align="center"><img src="docs/screenshots/proxy.png" width="760" alt="反代面板"/></p>
+### ♻️ MCPHub 路径复用：把一次对话的做法沉淀下来
 
-- 一键代理本机所有 Agent 服务（hermes / mcphub / ollama / 任意端口），增删改、启停、健康探测、端口扫描
-- **LLM 路由联动**：`http://127.0.0.1:3100/px/router/v1` 是所有 Agent 共用的模型入口，请求自动走智能路由——任何支持 OpenAI 兼容接口的工具改这一个地址即可
+```text
+① Agent A 的对话里配置并用过生图 MCP ──(自动导入)──▶ MCPHub 网关
+② Agent B 的新对话："帮我生成一张图"
+③ Agent B 查网关目录 / 搜索会话 ──▶ 发现 A 用过、网关里已有该工具
+④ Agent B 通过 MCPHub 直接调用同一工具，复现 A 的调用路径
+```
 
-### 🎼 多 Agent 任务编排（含自动续步 loop）
-
-自然语言目标 → 自动拆解 → 子 Agent 执行 → 验收 → 返工/人工裁决 → 自动续步：
-
-<p align="center"><img src="docs/screenshots/orch.png" width="760" alt="任务编排面板"/></p>
-
-- planner 固定走 complex 路由（不来回切模型），拆解为带依赖的步骤图
-- Worker 适配器：hermes(`-z`)、codex(`exec`)、devin(`-p`)，各家 CLI 登录后即用
-- 验收失败自动返工（≤3 轮）；仍失败转入 **awaiting_review 人工裁决**：通过 / 再返工 / 终止，24h 超时自动终止
-- **自动续步 loop**：任务完成后自动规划下一步优化（上限可配），实现"目标驱动的持续保活"
-- 并行派发（默认 2 并发）、正反辩论模式（needsDebate）、状态持久化重启不丢
-
-### 🔌 MCP 网关 / Skill 统一生态
+**工具沉淀进 MCPHub，用法沉淀进会话与记忆**——任何 Agent 遇到同类需求都能直接复用，用得越多，所有 Agent 一起变强。→ [详细说明](docs/mcp-gateway.md)
 
 <p align="center"><img src="docs/screenshots/mcp.png" width="760" alt="MCP 服务面板"/></p>
 
-- **MCPHub 网关**：各 Agent 配置的 MCP 自动扫描、导入 MCPHub，所有 Agent 共享一套工具；`http://localhost:3000/mcp` 一个地址全员接入
-- **MCP 健康监控**：故障自动修复 / macOS 通知告警
-- **Skill 同步**：全量 symlink 铺到每个 Agent 的原生目录，Skill 市场一键安装，跨 Agent 会话桥可读取任意 Agent 历史
-- **Agent 体检**：自动检测本机 8+ 种 Agent 的 MCP/Skill 配置状态
+### 🧭 LLM 智能路由
 
-<p align="center"><img src="docs/screenshots/skills.png" width="760" alt="已安装 Skills 面板"/></p>
+OpenAI 兼容本地代理，分类器判断任务等级后分流：
 
-### 📊 用量看板与巡检日报
+| 路由 | 适用场景 | 默认模型 |
+|---|---|---|
+| `simple` | 闲聊、问答、翻译 | deepseek-v4.1-flash |
+| `coding` | 写代码、跑命令、MCP 工具调用 | kimi-k3.1-pro |
+| `complex` | 架构设计、复杂分析、规划 | claude-opus-5-5 |
+| `expert` | 手动指定的最高难度任务 | claude-fable-5-2 |
 
-- **今日用量下钻**：点 simple/coding/complex/expert 看具体用了哪个服务商的哪个模型；一键切换「服务商视图」按上游聚合
-- **7 天趋势图**：各路线堆叠柱状图，失败数标红
-- **上游余额**：各上游累计消耗与账号额度一目了然
-- **每日巡检日报**：launchd 每天 21:00 自动汇总 24h 路由分布/失败/余额，让 complex 模型产出不超过 8 条优化建议，macOS 通知提醒——**系统自己会体检并告诉你哪里该优化**
+云端 / 本地 Ollama 双模式分类器 · 会话粘性 · 多级 fallback · 每日预算熔断 · 自定义厂商 · 热重载 · Agent 一键接入。→ [详细说明](docs/routing.md)
 
-### 💓 保活
+<p align="center"><img src="docs/screenshots/router.png" width="760" alt="自动路由面板"/></p>
 
-launchd 守护 Web UI / MCPHub / 看门狗 / 凭据同步 / 健康监控，全部 KeepAlive 自愈，重启 Mac 自动恢复。
+### 🌳 多 Agent 任务编排
+
+自然语言目标 → 拆解 → 子 Agent 池并行执行 → 验收 → 返工 / 人工裁决 → 自动续步 loop。
+
+- **子 Agent 池**：一个 Client 可建多个实例，空闲优先、自动扩容
+- **跨 Client 调度**：由编排模型判断每步交给 Hermes / Codex / Devin 中的哪一个
+- **执行树**：树干是编排 loop，分叉是子 Agent，实时状态、点击看详情
+- **失败自愈**：额度不足 / 网络中断 / LLM 异常自动分类 → 重试 → 冷却 → 切换 Client
+
+→ [详细说明](docs/orchestration.md)
+
+<p align="center"><img src="docs/screenshots/orch.png" width="760" alt="任务编排面板"/></p>
+
+### 🔀 反向代理 · 🧩 Skill 同步 · 📊 用量看板
+
+- 反代：`/px/<id>/` 聚合所有本地服务，`/px/router/v1` 是全员共用的模型入口 → [proxy.md](docs/proxy.md)
+- Skill：symlink 铺到每个 Agent，市场一键安装，Agent 体检 → [skills.md](docs/skills.md)
+- 看板：用量下钻、服务商视图、7 天趋势、余额、每日巡检日报 → [dashboard.md](docs/dashboard.md)
 
 ---
 
@@ -122,8 +131,8 @@ launchd 守护 Web UI / MCPHub / 看门狗 / 凭据同步 / 健康监控，全�
 | Node.js ≥ 18（推荐 22 LTS） | 运行全部服务 |
 | python3 | agent-bridge MCP server（macOS 自带） |
 | `@samanhappy/mcphub` | MCP 网关（可选，`npm i -g`） |
-| `agent-skill-manager` (asm) | skill 管理（可选，`npm i -g`） |
-| Ollama（可选） | 本地分类器/小模型，`brew install ollama` |
+| `agent-skill-manager` (asm) | Skill 管理（可选，`npm i -g`） |
+| Ollama（可选） | 本地分类器，`brew install ollama` |
 
 ### 安装
 
@@ -132,43 +141,17 @@ git clone https://github.com/PingYan-wang/agent-manager.git && cd agent-manager
 ./install.sh            # 检查依赖、生成 config.json、安装 launchd 服务
 ```
 
-打开 **http://localhost:3100**。
+打开 Web UI（默认 `http://localhost:3100`）。标签页支持 hash 直达，如 `/#router`、`/#orch`。
 
-### 接入自动路由（可选但推荐）
+### 接入智能路由（可选但推荐）
 
 ```bash
 mkdir -p ~/.hermes/router
 cp router/config.example.json ~/.hermes/router/config.json
-# 编辑 config.json 填入你的上游 API Key（或在 Web UI「自动路由 → 路由配置」里在线填写）
-node router/router.mjs &   # 或自行用 launchd/systemd 托管
+node router/router.mjs &
 ```
 
-然后在 UI「自动路由 → Agent 接入」一键把 Hermes 切到自动路由；其他 Agent 把 Base URL 改为 `http://127.0.0.1:3100/px/router/v1`（经反代）或 `http://127.0.0.1:8788/v1`（直连）即可。标签页支持 hash 直达，如 `http://localhost:3100/#router`。
-
----
-
-## 配置参考
-
-### `config.json`（Agent Manager 主配置，install.sh 生成）
-
-| 字段 | 默认 | 说明 |
-|---|---|---|
-| `port` | 3100 | Web UI 端口 |
-| `hubUrl` / `hubKey` | localhost:3000 | MCPHub 地址与 API Key |
-| `asmBin` | `~/.npm-global/bin/asm` | skill 管理器路径 |
-
-### `~/.hermes/router/config.json`（路由器配置）
-
-| 字段 | 说明 |
-|---|---|
-| `routes.<name>` | 路由定义：`baseUrl` / `apiKey` / `model` / `fallbacks[]`（可跨上游） |
-| `classifier.mode` | `cloud`（默认，复用路由上游）或 `local`（Ollama） |
-| `classifier.route` / `classifier.model` | 云端分类器继承的路由与模型（model 留空跟随） |
-| `classifierModel` / `ollamaUrl` | 本地分类器模型与 Ollama 地址 |
-| `budgets.<host>` | 每日预算：`{ "usd": 20 }`（按量计费）或 `{ "requests": 5000 }`（包月订阅），超限自动走兜底 |
-| `upstreamTimeoutMs` | 上游超时（默认 600s，兼容慢速推理模型） |
-
-改动可在 UI「路由配置」在线完成（保存即热重载，自动备份，Key 脱敏）。
+然后在「自动路由 → Agent 接入」一键接入 Hermes；其他 Agent 把 Base URL 改为反代入口 `/px/router/v1` 即可。
 
 ---
 
@@ -176,59 +159,42 @@ node router/router.mjs &   # 或自行用 launchd/systemd 托管
 
 | 端点 | 说明 |
 |---|---|
-| `GET/PUT /api/router/config` | 路由配置读取（脱敏）/保存（热重载） |
-| `GET /api/router/status` `/stats` `/balance` `/trend` `/model-usage` | 路由器健康、用量、余额、趋势、下钻明细 |
-| `GET/POST /api/router/local-models` `/pull` | Ollama 本地模型列表/下载 |
-| `GET/PUT /api/router/agent-apply` · `POST /agents/apply` | Agent 接入开关与一键接入 |
-| `GET /api/proxy/*` | 反代条目增删改、启停、端口扫描 |
-| `GET/POST /api/orchestrator/tasks` · `POST .../review` | 编排任务与人工裁决（pass/retry/abort） |
-| `GET /api/router/digests` `/digest` | 巡检日报列表/详情 |
+| `GET/PUT /api/router/config` | 路由配置（脱敏读取 / 保存即热重载） |
+| `GET /api/router/{status,stats,balance,trend,model-usage}` | 路由健康、用量、余额、趋势、下钻 |
+| `GET/POST /api/router/local-models` · `/pull` | Ollama 本地模型 |
+| `GET /api/proxy/*` | 反代条目管理 |
+| `GET/POST /api/orchestrator/tasks` · `.../review` | 编排任务与人工裁决 |
+| `GET/POST /api/orchestrator/agent-pool` | 子 Agent 池 |
 
-完整 API 见 `server.js` 路由表。
-
----
+完整 API 见 `server.js` 与各功能文档。
 
 ## 目录结构
 
 ```
-server.js               # HTTP 服务 + 全部 API + fs.watch 自动同步
-orchestrator.js         # 任务编排引擎（规划/派发/验收/返工/人工裁决/续步）
-config.js               # 配置加载（env > config.json > 默认）
-public/index.html       # 中文 Web UI（自动路由/反代/编排/看板/MCP 市场）
-router/
-  router.mjs            # LLM 智能路由代理（OpenAI 兼容，:8788）
-  config.example.json   # 路由配置模板（填入你的 Key 后放到 ~/.hermes/router/）
-skills/agent-ecosystem/ # 内置 skill：生态系统能力说明书
-tools/
-  agent-bridge/         # 跨 Agent 会话读取 MCP server
-  mcp-monitor.js        # MCP 健康监控/修复/macOS 通知
-  watchdog.sh           # launchd 保活看门狗
-  wb-cred-sync.js       # WorkBuddy 凭据→MCPHub 注入（可选）
+server.js               # HTTP 服务 + 全部 API + 自动同步
+orchestrator.js         # 任务编排引擎（子 Agent 池 / 执行树 / 失败自愈 / 续步）
+public/index.html       # 中文 Web UI
+router/                 # LLM 智能路由代理 + 配置模板
+tools/agent-bridge/     # 跨 Agent 会话读取 + 共享记忆 MCP server
+tools/mcp-monitor.js    # MCP 健康监控
+skills/agent-ecosystem/ # 内置 Skill：生态能力说明书
 launchd/                # launchd plist 模板
-config.example.json     # 主配置模板
-docs/
-  assets/               # README banner 与架构图
-  screenshots/          # 各功能面板截图
+docs/                   # 功能文档、截图、架构图
 ```
-
-## launchd 服务
-
-`install.sh` 安装 5 个服务（`~/Library/LaunchAgents/`）：Web UI、MCPHub、HTTP 探活看门狗、WorkBuddy 凭据同步（可选）、MCP 健康监控。路由器可用同样方式托管：`node router/router.mjs` 配 KeepAlive plist 即可。
 
 ## 安全说明
 
-- `config.json` / `~/.hermes/router/config.json` 含 API Key，**均已 gitignore / 不入库**，示例文件只有占位符
-- 路由器仅监听 `127.0.0.1`，反代同样仅本机；不要暴露到公网
-- 预算熔断建议对所有按量计费上游设置 `budgets.usd` 上限
-- `tools/decrypt-wb-creds.js` 仅用于迁移用户自己的已授权凭据，请勿用于他人数据
+- 含 API Key 的配置文件均已 gitignore，示例文件只有占位符
+- 路由器与反代仅监听本机，不要暴露到公网
+- 建议对所有按量计费上游设置每日预算上限
 
 ## Roadmap
 
-- [ ] 路由质量指标看板（任务成功率/返工次数/token 成本）
-- [ ] per-deployment cooldown + 指数退避（故障上游自动摘除）
-- [ ] verify 独立 agent 验收（消除 planner 自评偏差）
-- [ ] 编排 worker 角色化配置（researcher/reviewer/tester）
-- [ ] RouteLLM 本地路由模型（用积累的分类数据微调，进一步降本）
+- [ ] 路由质量指标看板（成功率 / 返工次数 / token 成本）
+- [ ] per-deployment cooldown + 指数退避
+- [ ] 独立 verify agent 验收
+- [ ] 编排 worker 角色化（researcher / reviewer / tester）
+- [ ] RouteLLM 本地路由模型
 
 ## License
 
