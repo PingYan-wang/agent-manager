@@ -597,6 +597,65 @@ async function syncAllMcp() {
   return { imported, skipped, failed };
 }
 
+// ---------- Agent 连接自修复 ----------
+// 各 Agent 的 mcphub 条目格式（与其原生 MCP 配置 schema 对齐）
+function hubEntryFor(a) {
+  const url = `${HUB_URL}/mcp`;
+  const auth = `Bearer ${HUB_KEY}`;
+  switch (a.id) {
+    case 'codex': return { kind: 'toml', text: `[mcp_servers.mcphub]\nurl = "${url}"\nhttp_headers = { "Authorization" = "${auth}" }\n` };
+    case 'hermes': return { kind: 'yaml' };
+    case 'devin': return { kind: 'json', value: { url, transport: 'http', headers: { Authorization: auth } } };
+    case 'windsurf': return { kind: 'json', value: { serverUrl: url, headers: { Authorization: auth } } };
+    case 'workbuddy': return { kind: 'json', value: { type: 'streamableHttp', url, timeout: 30000, disabled: false, headers: { Authorization: auth } } };
+    case 'gemini': return { kind: 'json', value: { httpUrl: url, headers: { Authorization: auth } } };
+    case 'cursor': return { kind: 'json', value: { url, headers: { Authorization: auth } } };
+    default: return { kind: 'json', value: { type: 'http', url, headers: { Authorization: auth } } };
+  }
+}
+
+async function repairAgentMcphub(a) {
+  const e = hubEntryFor(a);
+  const files = (a.mcpFiles || []).filter((f) => f.kind === e.kind || e.kind === 'json');
+  if (e.kind === 'json') {
+    const jsonFiles = (a.mcpFiles || []).filter((f) => f.kind === 'json');
+    let target = null;
+    for (const f of jsonFiles) if (await exists(f.path)) { target = f.path; break; }
+    if (!target) target = jsonFiles[0]?.path;
+    if (!target) return { ok: false, error: '该 Agent 无 JSON MCP 配置文件' };
+    const obj = (await readJson(target)) || {};
+    obj.mcpServers = obj.mcpServers || {};
+    if (obj.mcpServers.mcphub) return { ok: true, note: '已存在 mcphub 配置', path: target };
+    obj.mcpServers.mcphub = e.value;
+    await mkdir(path.dirname(target), { recursive: true });
+    await writeFile(target, JSON.stringify(obj, null, 2) + '\n');
+    return { ok: true, note: `已写入 ${target}`, path: target };
+  }
+  if (e.kind === 'toml') {
+    const f = (a.mcpFiles || []).find((x) => x.kind === 'toml');
+    if (!f) return { ok: false, error: '无 TOML MCP 配置' };
+    const txt = await readFile(f.path, 'utf8').catch(() => '');
+    if (/\[mcp_servers\.mcphub\]/.test(txt)) return { ok: true, note: '已存在 mcphub 配置', path: f.path };
+    await writeFile(f.path, txt.replace(/\s*$/, '\n\n') + e.text);
+    return { ok: true, note: `已追加 ${f.path}`, path: f.path };
+  }
+  return { ok: false, error: '该 Agent 的 MCP 配置格式暂不支持自动写入，请手动添加 mcphub（见 agent-ecosystem skill）' };
+}
+
+// what: 'mcphub' | 'launch'
+async function repairAgent(agentId, what) {
+  const a = AGENTS.find((x) => x.id === agentId);
+  if (!a) return { ok: false, error: '未知 Agent' };
+  if (what === 'mcphub') return repairAgentMcphub(a);
+  if (what === 'launch') {
+    if (!a.app) return { ok: false, error: '该 Agent 无桌面应用可启动' };
+    if (!(await exists(a.app))) return { ok: false, error: '应用未安装' };
+    const r = await runCmd('/usr/bin/open', [a.app], 10000);
+    return r.code === 0 ? { ok: true, note: `已启动 ${a.name}` } : { ok: false, error: r.stderr || '启动失败' };
+  }
+  return { ok: false, error: '未知修复项' };
+}
+
 // ---------- 反向代理 ----------
 // 统一入口 /px/<id>/... → 本地 Agent 服务；内置 /px/router → 自动路由器（LLM 统一入口）
 const PROXY_FILE = path.join(DATA_DIR, 'proxy.json');
@@ -726,9 +785,8 @@ const routerMgmtRoutes = [
     if (!c) return json(res, 500, { error: 'router config not found' });
     return json(res, 200, { config: maskConfig(c) });
   }],
-  ['PUT', /^\/api\/router\/config$/, async (req, res) => {
-    let incoming;
-    try { incoming = JSON.parse(await readBody(req)); } catch { return json(res, 400, { error: 'invalid json' }); }
+  ['PUT', /^\/api\/router\/config$/, async (req, res, body) => {
+    let incoming = body;
     if (!incoming || typeof incoming.routes !== 'object' || !Object.keys(incoming.routes).length) return json(res, 400, { error: 'routes 不能为空' });
     for (const [n, r] of Object.entries(incoming.routes)) {
       if (!r || typeof r.model !== 'string' || !r.model.trim()) return json(res, 400, { error: `路由 ${n} 缺少 model` });
@@ -762,30 +820,53 @@ const routerMgmtRoutes = [
       return json(res, 200, { models: (j.models || []).map(m => m.name), pulls });
     } catch { return json(res, 200, { models: [], pulls, error: 'ollama offline' }); }
   }],
-  ['POST', /^\/api\/router\/local-models\/pull$/, async (req, res) => {
-    let body = {};
-    try { body = JSON.parse(await readBody(req) || '{}'); } catch {}
+  ['POST', /^\/api\/router\/local-models\/pull$/, async (req, res, body) => {
+    body = body || {};
     const model = String(body.model || '').trim();
     if (!/^[a-zA-Z0-9._:-]{2,80}$/.test(model)) return json(res, 400, { error: 'invalid model name' });
     if (LOCAL_PULLS.has(model)) return json(res, 200, { ok: true, status: LOCAL_PULLS.get(model).status });
     const safe = model.replace(/[^a-zA-Z0-9._-]/g, '_');
     const log = path.join(DATA_DIR, `ollama-pull-${safe}.log`);
     LOCAL_PULLS.set(model, { status: 'pulling', log });
-    const { createWriteStream } = await import('node:fs');
-    const out = createWriteStream(log, { flags: 'a' });
-    out.write(`\n=== pull ${model} @ ${new Date().toISOString()} ===\n`);
-    const child = spawn(OLLAMA_BIN, ['pull', model], { stdio: ['ignore', out, out] });
-    child.on('close', (code) => { const s = LOCAL_PULLS.get(model); if (s) { s.status = code === 0 ? 'done' : 'error'; s.code = code; } out.end(); });
-    child.on('error', (e) => { const s = LOCAL_PULLS.get(model); if (s) { s.status = 'error'; s.error = String(e.message); } out.end(); });
+    const { openSync, closeSync, writeSync } = await import('node:fs');
+    const fd = openSync(log, 'a');
+    writeSync(fd, `\n=== pull ${model} @ ${new Date().toISOString()} ===\n`);
+    const child = spawn(OLLAMA_BIN, ['pull', model], { stdio: ['ignore', fd, fd] });
+    child.on('close', (code) => { const s = LOCAL_PULLS.get(model); if (s) { s.status = code === 0 ? 'done' : 'error'; s.code = code; } closeSync(fd); });
+    child.on('error', (e) => { const s = LOCAL_PULLS.get(model); if (s) { s.status = 'error'; s.error = String(e.message); } closeSync(fd); });
     return json(res, 200, { ok: true, status: 'pulling' });
+  }],
+  ['GET', /^\/api\/router\/model-usage$/, async (req, res) => {
+    try {
+      const log = await readFile(path.join(ROUTER_DIR, 'router.log'), 'utf8');
+      const today = new Date().toISOString().slice(0, 10);
+      const weekAgo = Date.now() - 7 * 86400000;
+      const agg = new Map();
+      for (const line of log.split('\n')) {
+        const m = line.match(/^\[router\] (\S+) route=(\S+) model=(\S+)(?: host=(\S+))?(?: stick=1)? (ok|FAIL)/);
+        if (!m) continue;
+        const t = Date.parse(m[1]);
+        if (isNaN(t) || t < weekAgo) continue;
+        const host = m[4] || '';
+        const key = m[2] + '|' + m[3] + '|' + host;
+        let a = agg.get(key);
+        if (!a) { a = { route: m[2], model: m[3], host, count: 0, fails: 0, today: 0 }; agg.set(key, a); }
+        a.count++;
+        if (m[5] === 'FAIL') a.fails++;
+        if (m[1].slice(0, 10) === today) a.today++;
+      }
+      const items = [...agg.values()].sort((a, b) => b.count - a.count);
+      return json(res, 200, { items, today });
+    } catch (e) {
+      return json(res, 200, { items: [], today: '', error: String((e && e.message) || e).slice(0, 120) });
+    }
   }],
   ['GET', /^\/api\/router\/agent-apply$/, async (req, res) => {
     const f = (await readJson(APPLY_FILE)) || { enabled: true };
     return json(res, 200, { enabled: !!f.enabled });
   }],
-  ['PUT', /^\/api\/router\/agent-apply$/, async (req, res) => {
-    let body = {};
-    try { body = JSON.parse(await readBody(req) || '{}'); } catch {}
+  ['PUT', /^\/api\/router\/agent-apply$/, async (req, res, body) => {
+    body = body || {};
     const enabled = !!body.enabled;
     await mkdir(DATA_DIR, { recursive: true });
     await writeFile(APPLY_FILE, JSON.stringify({ enabled }));
@@ -803,9 +884,8 @@ const routerMgmtRoutes = [
     for (const [id, name] of [['workbuddy', 'WorkBuddy'], ['devin', 'Devin CLI'], ['codex', 'Codex CLI']]) agents.push({ id, name, applied: false, manual: true, hint: '手动将其 LLM Base URL 指向自动路由入口' });
     return json(res, 200, { agents, proxyUrl: 'http://127.0.0.1:3100/px/router/v1', directUrl: 'http://127.0.0.1:8788/v1' });
   }],
-  ['POST', /^\/api\/router\/agents\/apply$/, async (req, res) => {
-    let body = {};
-    try { body = JSON.parse(await readBody(req) || '{}'); } catch {}
+  ['POST', /^\/api\/router\/agents\/apply$/, async (req, res, body) => {
+    body = body || {};
     if (body.agent !== 'hermes') return json(res, 400, { error: '该 Agent 需手动接入' });
     const f = (await readJson(APPLY_FILE)) || { enabled: true };
     if (!f.enabled) return json(res, 403, { error: '一键接入开关已关闭' });
@@ -940,6 +1020,10 @@ const routes = [...routerMgmtRoutes,
     if (srv.kind === 'stdio' && !srv.command) return json(res, 400, { error: 'stdio 服务缺少 command' });
     const r = await hubFetch('POST', '/servers', { name: `${agentId}-${serverName}`.replace(/[^\w.-]/g, '_'), config: toHubConfig(srv) });
     json(res, r.status, r.data);
+  }],
+  ['POST', /^\/api\/agents\/([^/]+)\/repair$/, async (req, res, body, m) => {
+    const r = await repairAgent(m[1], body?.what);
+    json(res, r.ok ? 200 : 400, r);
   }],
 
   // ---- MCPHub 代理 ----

@@ -326,8 +326,21 @@ Dashboard:  http://localhost:3000  (账号见 MCPHub Dashboard)
       <div id="routerRoutes"><div class="empty">加载中…</div></div>
     </div>
     <div class="card">
-      <div class="toolbar"><h3>今日用量</h3><button class="ghost" style="margin-left:auto" onclick="loadRouter()">↻ 刷新</button></div>
+      <div class="toolbar"><h3>路由配置</h3><span class="muted" style="margin-left:auto">自定义厂商与路由；保存后路由器自动热重载，API Key 留空表示不修改</span></div>
+      <div id="routerCfg"><div class="empty">加载中…</div></div>
+    </div>
+    <div class="card">
+      <div class="toolbar"><h3>分类器（分流小模型）</h3><span class="muted" style="margin-left:auto">默认云端；本地模式可一键下载 Ollama 模型</span></div>
+      <div id="routerClassifier"><div class="empty">加载中…</div></div>
+    </div>
+    <div class="card">
+      <div class="toolbar"><h3>Agent 接入自动路由</h3><span class="muted" style="margin-left:auto">一键把 Agent 的 LLM 指向自动路由</span></div>
+      <div id="routerAgents"><div class="empty">加载中…</div></div>
+    </div>
+    <div class="card">
+      <div class="toolbar"><h3>今日用量</h3><span style="margin-left:auto;display:flex;gap:6px;align-items:center"><button class="ghost" onclick="rcUsageView('route')">路线</button><button class="ghost" onclick="rcUsageView('provider')">服务商</button><button class="ghost" onclick="loadRouter()">↻ 刷新</button></span></div>
       <div id="routerStats"><div class="empty">加载中…</div></div>
+      <div id="routerUsageDetail"></div>
       <div class="muted" style="margin-top:10px">最近路由日志</div>
       <pre class="mono" id="routerLog" style="margin-top:6px;max-height:220px;overflow:auto;background:var(--surface2);border:1px solid var(--line);border-radius:var(--r-sm);padding:10px;font-size:11px;white-space:pre-wrap;word-break:break-all"></pre>
     </div>
@@ -416,6 +429,12 @@ document.addEventListener('click', e => {
 });
 
 // ---------- Agent 体检 ----------
+async function agentRepair(id, what){
+  toast('修复中…');
+  const r = await api(`/api/agents/${id}/repair`, { method:'POST', body:{ what } });
+  toast(r.note || (r.ok ? '修复完成' : '失败：' + (r.error || '')), !r.ok);
+  loadAgents();
+}
 const fold = (key, label, count, inner, open) => `
   <div class="fold${open?' open':''}" data-fold="${key}">
     <button class="fold-head" type="button"><span class="chev">▶</span>${label}${count!==undefined&&count!==null&&count!==''?`<span class="n">${count}</span>`:''}</button>
@@ -438,20 +457,21 @@ async function loadAgents(){
     const key = gwMap[cand] !== undefined ? cand
       : Object.keys(gwMap).find(k => k === s.name || k.endsWith(`-${String(s.name).replace(/[^\w.-]/g,'_')}`));
     const st = key !== undefined ? gwMap[key] : undefined;
-    if (st) return gwOk(st) ? { cls:'on', txt:'在线' } : { cls:'', txt:'离线' };
+    if (st) return gwOk(st) ? { cls:'on', txt:'在线' } : { cls:'', txt:'离线', reload:key };
     return { cls:'', txt:'—' };
   };
   $('#agentList').innerHTML = '<div class="agent-grid">' + list.map(a=>{
+    const fixBtn = (what, label) => `<button class="ghost" data-act="agent-repair" data-agent="${a.id}" data-what="${what}">${label}</button>`;
     const connInner = `<table class="mini-table"><tr><th>项目</th><th>状态</th><th>详情</th></tr>
       <tr><td>应用</td><td>${a.appExists?'<span class="badge on">已安装</span>':'<span class="badge off">未安装</span>'}</td><td class="path">${esc(a.app||'—')}</td></tr>
       ${a.cli?`<tr><td>CLI</td><td>${a.cliPath?'<span class="badge on">可用</span>':'<span class="badge off">未找到</span>'}</td><td class="path">${esc(a.cliPath||a.cli)}</td></tr>`:''}
-      <tr><td>进程</td><td>${a.running?'<span class="badge on">运行中</span>':'<span class="badge">未运行</span>'}</td><td class="muted">—</td></tr>
-      <tr><td>MCPHub</td><td>${a.mcphub?'<span class="badge on">已接入</span>':'<span class="badge warn">未接入</span>'}</td><td class="path">${esc(gw.endpoint||'')}</td></tr></table>`;
+      <tr><td>进程</td><td>${a.running?'<span class="badge on">运行中</span>':'<span class="badge">未运行</span>'}</td><td>${a.running?'':'<span class="muted">—</span>'}${!a.running&&a.app?fixBtn('launch','启动'):''}</td></tr>
+      <tr><td>MCPHub</td><td>${a.mcphub?'<span class="badge on">已接入</span>':'<span class="badge warn">未接入</span>'}</td><td class="path">${esc(gw.endpoint||'')}${!a.mcphub?' '+fixBtn('mcphub','接入'):''}</td></tr></table>`;
     const mcpInner = a.mcpServers.length ? `<table class="mini-table"><tr><th>名称</th><th>类型</th><th>地址/命令</th><th></th></tr>` + a.mcpServers.map(s=>{
       const st = mcpStatus(a, s);
       return `
       <tr><td class="mono">${esc(s.name)}</td>
-      <td><span class="badge ${st.cls}">${esc(s.transport||s.kind)}</span></td>
+      <td><span class="badge ${st.cls}"${st.reload?` data-act="srv-reload" data-name="${esc(st.reload)}" style="cursor:pointer" title="连接异常，点击重载"`:''}>${esc(s.transport||s.kind)}</span></td>
       <td class="path">${esc(s.url||[s.command,(s.args||[]).join(' ')].filter(Boolean).join(' '))}</td>
       <td>${s.kind==='http'&&!s.disabled?`<button class="ghost" data-act="import-mcp" data-agent="${a.id}" data-name="${esc(s.name)}">导入</button>`:''}</td></tr>`;
     }).join('') + '</table>'
@@ -802,6 +822,7 @@ document.addEventListener('click', e => {
   const d = el.dataset;
   if(act==='market-install'){ openInstallModal(d.source); return; }
   if(act==='import-mcp'){ api('/api/agents/import-mcp',{method:'POST',body:{agentId:d.agent,serverName:d.name}}).then(r=>{ toast(r.success===false?'导入失败: '+(r.message||''):'已导入 '+d.name+' → MCPHub', r.success===false); loadServers(); }); return; }
+  if(act==='agent-repair'){ agentRepair(d.agent, d.what); return; }
   if(act==='link-skill'){ agentSkillAction(d.path, d.agent, true); return; }
   if(act==='copy-skill'){ agentSkillAction(d.path, d.agent, false); return; }
   if(act==='srv-toggle'){ srvToggle(d.name, d.enabled==='true'); return; }
@@ -819,15 +840,221 @@ document.addEventListener('click', e => {
 });
 
 // ---------- 自动路由 ----------
+// ---------- 路由配置 / 分类器 / Agent 接入 ----------
+let routerCfgData = null;
+async function loadRouterConfigUI(){
+  try{
+    const d = await api('/api/router/config');
+    routerCfgData = d.config || null;
+    if(routerCfgData){ renderRouterCfg(); renderRouterClassifier(); }
+    else $('#routerCfg').innerHTML = '<div class="empty">配置加载失败</div>';
+  }catch(e){ $('#routerCfg').innerHTML = '<div class="empty">加载失败</div>'; }
+}
+function rcProvSelects(){
+  const provs = Object.keys((routerCfgData&&routerCfgData.providers)||{});
+  return ['', ...provs].map(p=>`<option value="${esc(p)}">${p?esc(p):'直接填写'}</option>`).join('');
+}
+function renderRouterCfg(){
+  const cfg = routerCfgData; if(!cfg) return;
+  const provs = cfg.providers || {};
+  let h = '<div style="margin-bottom:6px"><b>厂商</b> <span class="muted">OpenAI 兼容接口；路由可引用厂商或直接填写地址</span></div>';
+  const provRows = Object.entries(provs).map(([n,p])=>`<div style="display:flex;gap:8px;align-items:center;margin:3px 0;font-size:12px"><code>${esc(n)}</code><span class="muted" style="word-break:break-all">${esc(p.baseUrl)}</span><button class="ghost" onclick="rcDelProvider('${esc(n)}')">删除</button></div>`).join('');
+  h += `<div>${provRows || '<span class="muted">暂无厂商，先添加一个</span>'}</div>
+  <div style="display:flex;gap:6px;margin:6px 0;flex-wrap:wrap">
+   <input id="rcProvName" placeholder="厂商名" style="width:110px">
+   <input id="rcProvUrl" placeholder="https://api.example.com/v1" style="width:250px">
+   <input id="rcProvKey" type="password" placeholder="API Key" style="width:170px">
+   <button class="ghost" onclick="rcAddProvider()">＋ 添加厂商</button></div>`;
+  h += '<div style="margin:10px 0 6px"><b>路由</b> <span class="muted">每条路由 = 主模型 + 备选链；备选格式：model 或 model | baseUrl | apiKey（每行一个）</span></div>';
+  for(const [name,r] of Object.entries(cfg.routes||{})){
+    const curProv = r.provider && provs[r.provider] ? r.provider : '';
+    const fbLines = (r.fallbacks||[]).map(f=>{
+      if(f.baseUrl && f.baseUrl!==r.baseUrl) return `${f.model} | ${f.baseUrl} | ${f.apiKey&&f.apiKey!=='***'?f.apiKey:''}`;
+      return f.model;
+    }).join('\n');
+    h += `<div class="rc-route" data-name="${esc(name)}" style="border:1px solid var(--line);border-radius:var(--r-sm);padding:8px;margin:8px 0">
+     <div style="display:flex;gap:8px;align-items:center;margin-bottom:6px;flex-wrap:wrap"><b>${esc(name)}</b>
+      <select class="rc-provsel" style="font-size:12px">${rcProvSelects().replace(`<option value="${curProv}">`, `<option value="${curProv}" selected>`)}
+      <button class="ghost" style="margin-left:auto" onclick="rcDelRoute('${esc(name)}')">删除路由</button></div>
+     <div style="display:flex;gap:6px;flex-wrap:wrap">
+      <input class="rc-model" value="${esc(r.model)}" placeholder="模型名" style="width:200px">
+      <input class="rc-url" value="${curProv?'':esc(r.baseUrl)}" placeholder="https://.../v1" style="width:270px">
+      <input class="rc-key" type="password" value="${r.apiKey==='***'?'':esc(r.apiKey||'')}" placeholder="${r.apiKey==='***'?'已配置(留空不变)':'API Key'}" style="width:160px"></div>
+     <textarea class="rc-fb" rows="2" placeholder="备选模型，每行一个" style="width:100%;margin-top:6px;font-size:12px">${esc(fbLines)}</textarea></div>`;
+  }
+  h += `<div style="margin-top:8px;display:flex;gap:8px;align-items:center;flex-wrap:wrap"><input id="rcNewRoute" placeholder="新路由名（如 fast / vision）" style="width:180px"><button class="ghost" onclick="rcAddRoute()">＋ 添加路由</button>
+   <button onclick="rcSaveConfig()" style="margin-left:auto">保存配置</button></div>`;
+  $('#routerCfg').innerHTML = h;
+}
+function rcAddProvider(){
+  const n=$('#rcProvName').value.trim(), u=$('#rcProvUrl').value.trim(), k=$('#rcProvKey').value.trim();
+  if(!n||!u){alert('厂商名和地址必填');return;}
+  if(!routerCfgData.providers) routerCfgData.providers={};
+  routerCfgData.providers[n]={baseUrl:u, apiKey:k};
+  renderRouterCfg();
+}
+function rcDelProvider(n){
+  if(!confirm('删除厂商 '+n+'？引用它的路由需改为直接填写')) return;
+  delete routerCfgData.providers[n];
+  for(const r of Object.values(routerCfgData.routes||{})) if(r.provider===n) delete r.provider;
+  renderRouterCfg();
+}
+function rcAddRoute(){
+  const n=$('#rcNewRoute').value.trim();
+  if(!n){alert('请输入路由名');return;}
+  if(routerCfgData.routes[n]){alert('路由已存在');return;}
+  routerCfgData.routes[n]={model:'',baseUrl:'',apiKey:'***',fallbacks:[]};
+  renderRouterCfg();
+}
+function rcDelRoute(n){
+  if(Object.keys(routerCfgData.routes).length<=1){alert('至少保留一条路由');return;}
+  if(!confirm('删除路由 '+n+'？')) return;
+  delete routerCfgData.routes[n];
+  renderRouterCfg();
+}
+async function rcSaveConfig(){
+  const cfg = JSON.parse(JSON.stringify(routerCfgData));
+  const routes = {};
+  document.querySelectorAll('#routerCfg .rc-route').forEach(el=>{
+    const name = el.dataset.name;
+    const prov = el.querySelector('.rc-provsel').value;
+    const provCfg = prov && cfg.providers && cfg.providers[prov];
+    const baseUrl = provCfg ? provCfg.baseUrl : el.querySelector('.rc-url').value.trim();
+    const apiKey = provCfg ? '***' : (el.querySelector('.rc-key').value.trim() || '***');
+    const model = el.querySelector('.rc-model').value.trim();
+    const fbs = [];
+    el.querySelector('.rc-fb').value.split('\n').map(x=>x.trim()).filter(Boolean).forEach(line=>{
+      const p = line.split('|').map(x=>x.trim());
+      if(p.length===1) fbs.push({model:p[0]});
+      else if(p.length>=2) fbs.push({model:p[0], baseUrl:p[1]||'', apiKey:p[2]||''});
+    });
+    routes[name] = {model, baseUrl, apiKey, fallbacks:fbs, ...(prov?{provider:prov}:{})};
+  });
+  if(!Object.keys(routes).length){alert('至少保留一条路由');return;}
+  cfg.routes = routes;
+  const mode = $('#rcClfMode').value;
+  if(mode==='cloud') cfg.classifier = {mode:'cloud', route:$('#rcClfRoute').value, model:$('#rcClfModel').value.trim()};
+  else cfg.classifier = {mode:'local', model:($('#rcClfLocalCustom').value.trim() || $('#rcClfLocalModel').value || '')};
+  const r = await api('/api/router/config', {method:'PUT', body:cfg});
+  if(r.ok){ alert('已保存'+(r.reloaded?'，路由器已热重载':'，路由器重启中')); loadRouterConfigUI(); }
+  else alert('保存失败：'+(r.error||JSON.stringify(r)));
+}
+function renderRouterClassifier(){
+  const cfg = routerCfgData; if(!cfg) return;
+  const c = cfg.classifier || {mode:'cloud', route:'simple', model:''};
+  const routes = Object.keys(cfg.routes||{});
+  const isCloud = (c.mode||'cloud')!=='local';
+  let h = `<div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap;margin-bottom:8px">
+   <select id="rcClfMode" onchange="rcClfModeChange()">
+    <option value="cloud" ${isCloud?'selected':''}>云端小模型（默认）</option>
+    <option value="local" ${isCloud?'':'selected'}>本地小模型（Ollama）</option></select>
+   <span id="rcClfCloud" style="display:${isCloud?'inline-flex':'none'};gap:6px;align-items:center">
+    <span class="muted">继承路由</span><select id="rcClfRoute">${routes.map(r=>`<option value="${esc(r)}" ${(c.route||'simple')===r?'selected':''}>${esc(r)}</option>`).join('')}</select>
+    <input id="rcClfModel" value="${esc(c.model||'')}" placeholder="模型名（留空=跟随路由模型）" style="width:210px"></span>
+   <span id="rcClfLocal" style="display:${isCloud?'none':'inline-flex'};gap:6px;align-items:center">
+    <select id="rcClfLocalModel"></select>
+    <input id="rcClfLocalCustom" placeholder="或输入模型名，如 qwen3:4b" style="width:170px">
+    <button class="ghost" onclick="rcPullModel()">下载</button></span></div>
+   <div id="rcClfStatus" class="muted" style="font-size:12px"></div>`;
+  $('#routerClassifier').innerHTML = h;
+  loadLocalModels();
+}
+function rcClfModeChange(){
+  const m = $('#rcClfMode').value;
+  $('#rcClfCloud').style.display = m==='cloud'?'inline-flex':'none';
+  $('#rcClfLocal').style.display = m==='local'?'inline-flex':'none';
+}
+async function loadLocalModels(){
+  try{
+    const d = await api('/api/router/local-models');
+    const sel = $('#rcClfLocalModel');
+    if(sel) sel.innerHTML = (d.models&&d.models.length? d.models.map(m=>`<option value="${esc(m)}">${esc(m)}</option>`).join('') : '<option value="">（无本地模型）</option>');
+    const st = $('#rcClfStatus');
+    if(st){
+      const pulls = Object.entries(d.pulls||{}).map(([m,p])=>`${m}: ${p.status}`).join('；');
+      st.textContent = [d.error, pulls?('下载任务：'+pulls):'', d.models&&d.models.length?('已安装：'+d.models.join(', ')):''].filter(Boolean).join('；');
+    }
+  }catch(e){}
+}
+async function rcPullModel(){
+  const name = ($('#rcClfLocalCustom').value||'').trim() || ($('#rcClfLocalModel').value||'').trim();
+  if(!name){alert('请先选择或输入模型名');return;}
+  const r = await api('/api/router/local-models/pull', {method:'POST', body:{model:name}});
+  if(r.error){alert(r.error);return;}
+  setTimeout(loadLocalModels, 2000);
+}
+async function loadRouterAgents(){
+  try{
+    const d = await api('/api/router/agents');
+    const ap = await api('/api/router/agent-apply');
+    let h = `<div style="display:flex;gap:8px;align-items:center;margin-bottom:8px;flex-wrap:wrap">
+     <label style="font-size:13px"><input type="checkbox" id="rcApplySwitch" ${ap.enabled?'checked':''} onchange="rcToggleApply(this.checked)"> 一键接入开关</label>
+     <button class="ghost" style="margin-left:auto" onclick="navigator.clipboard.writeText('${d.proxyUrl}');this.textContent='已复制'">复制反代 LLM 地址</button></div>`;
+    h += d.agents.map(a=>`<div style="display:flex;gap:8px;align-items:center;padding:6px 0;border-top:1px solid var(--line);font-size:13px;flex-wrap:wrap">
+     <span style="min-width:110px">${esc(a.name)}</span>
+     ${a.applied?'<span class="badge on">已接入</span>':a.manual?'<span class="muted">需手动</span>':'<span class="badge off">未接入</span>'}
+     ${a.detail?`<span class="muted" style="font-size:11px">${esc(a.detail)}</span>`:''}
+     ${a.manual?`<span class="muted" style="font-size:11px">${esc(a.hint||'')}</span>`:''}
+     ${!a.applied && !a.manual ? `<button class="ghost" onclick="rcApplyAgent('${a.id}')">一键接入</button>`:''}</div>`).join('');
+    h += `<div class="muted" style="margin-top:8px;font-size:12px">统一入口（防冲突，走 Agent Manager 代理）：${d.proxyUrl}<br>直连路由器：${d.directUrl}<br>WorkBuddy / Devin / Codex 的 LLM 为云端托管或需各自客户端配置，请手动填写上述地址。</div>`;
+    $('#routerAgents').innerHTML = h;
+  }catch(e){ $('#routerAgents').innerHTML = '<div class="empty">加载失败</div>'; }
+}
+async function rcToggleApply(v){ await api('/api/router/agent-apply', {method:'PUT', body:{enabled:v}}); }
+async function rcApplyAgent(id){
+  const r = await api('/api/router/agents/apply', {method:'POST', body:{agent:id}});
+  if(r.error){alert(r.error);return;}
+  alert(r.note || (r.already?'已是接入状态':'完成'));
+  loadRouterAgents();
+}
+
+// ---------- 用量下钻 / 服务商视图 ----------
+let rcUsageViewMode = 'route';
+let rcUsageExpanded = null;
+function renderUsageDetail(){
+  const d = window.__rcUsage; if(!d) return;
+  const el = $('#routerUsageDetail'); if(!el) return;
+  if(rcUsageViewMode==='provider'){
+    const map = {};
+    (d.items||[]).filter(x=>x.today>0).forEach(x=>{
+      const h = x.host || '未知上游';
+      if(!map[h]) map[h]={};
+      map[h][x.model] = (map[h][x.model]||0) + x.today;
+    });
+    const rows = Object.entries(map).map(([h,ms])=>{
+      const tot = Object.values(ms).reduce((s,n)=>s+n,0);
+      const cells = Object.entries(ms).sort((a,b)=>b[1]-a[1]).map(([m,c])=>`${esc(m)} ×${c}`).join('<br>');
+      return `<tr><td class="name">${esc(h)}</td><td class="mono" style="font-size:11px">${cells}</td><td>${tot}</td></tr>`;
+    }).join('');
+    el.innerHTML = '<div class="muted" style="margin-top:12px">服务商视图（今日，各上游实际模型用量）</div>' + (rows ? `<table style="margin-top:6px"><tr><th>服务商</th><th>模型</th><th>次数</th></tr>${rows}</table>` : '<div class="empty">暂无数据（新日志将记录服务商）</div>');
+    return;
+  }
+  const routes = [...new Set((d.items||[]).map(x=>x.route))];
+  let h = '<div class="muted" style="margin-top:12px">下钻：点击路线查看具体服务商与模型（今日）</div><div style="display:flex;gap:6px;flex-wrap:wrap;margin-top:6px">';
+  routes.forEach(r=>{ h += `<button class="ghost" onclick="rcToggleRoute('${esc(r)}')">${esc(r)}${rcUsageExpanded===r?' ▾':' ▸'}</button>`; });
+  h += '</div>';
+  if(rcUsageExpanded){
+    const items = (d.items||[]).filter(x=>x.route===rcUsageExpanded && x.today>0).sort((a,b)=>b.today-a.today);
+    h += items.length ? '<table style="margin-top:6px"><tr><th>模型</th><th>服务商</th><th>今日</th><th>7天</th><th>失败</th></tr>' + items.map(x=>`<tr><td class="name">${esc(x.model)}</td><td class="path">${esc(x.host||'—')}</td><td>${x.today}</td><td>${x.count}</td><td>${x.fails?`<span style="color:#e5534b">${x.fails}</span>`:'0'}</td></tr>`).join('') + '</table>' : '<div class="empty">该路线今日暂无记录</div>';
+  }
+  el.innerHTML = h;
+}
+function rcToggleRoute(r){ rcUsageExpanded = (rcUsageExpanded===r?null:r); renderUsageDetail(); }
+function rcUsageView(v){ rcUsageViewMode = v; renderUsageDetail(); }
+
 async function loadRouter(){
-  const [st, ss, bl, dg, tr] = await Promise.all([
-    api('/api/router/status'), api('/api/router/stats'), api('/api/router/balance'), api('/api/router/digests'), api('/api/router/trend')
+  const [st, ss, bl, dg, tr, mu] = await Promise.all([
+    api('/api/router/status'), api('/api/router/stats'), api('/api/router/balance'), api('/api/router/digests'), api('/api/router/trend'), api('/api/router/model-usage')
   ]);
+  window.__rcUsage = mu;
   renderRouterStatus(st);
   renderRouterStats(ss);
   renderRouterBalance(bl);
   renderRouterDigests(dg);
   renderRouterTrend(tr);
+  renderUsageDetail();
+  loadRouterConfigUI();
+  loadRouterAgents();
 }
 function renderRouterStatus(st){
   if(!st || st.error){ $('#routerStatus').innerHTML = `<div class="empty">${esc((st&&st.error)||'加载失败')}</div>`; return; }
