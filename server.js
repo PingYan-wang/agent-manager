@@ -2,6 +2,7 @@
 // Agent Manager — 统一管理 MCPHub (MCP) 与 asm (Skills) 的本地可视化前端
 // 依赖: Node >= 18, 全局安装的 @samanhappy/mcphub 与 agent-skill-manager
 import http from 'node:http';
+import https from 'node:https';
 import { execFile } from 'node:child_process';
 import { readFile, readdir, stat, mkdir, symlink, realpath, lstat, writeFile } from 'node:fs/promises';
 import { watch } from 'node:fs';
@@ -108,34 +109,66 @@ const exists = async (p) => {
   }
 };
 
+// CLI 可执行文件探测：优先 PATH，再补常见安装目录；60s 缓存
+const BIN_DIRS = [`${process.env.HOME}/.npm-global/bin`, '/opt/homebrew/bin', '/usr/local/bin', `${process.env.HOME}/.local/bin`, '/usr/bin', '/bin'];
+const whichCache = new Map();
+async function whichBin(bin) {
+  const hit = whichCache.get(bin);
+  if (hit && Date.now() - hit.at < 60000) return hit.path;
+  let found = null;
+  const w = await runCmd('/usr/bin/which', [bin], 5000);
+  if (w.code === 0 && w.stdout.trim()) found = w.stdout.trim().split('\n')[0];
+  if (!found) for (const d of BIN_DIRS) {
+    const p = path.join(d, bin);
+    if (await exists(p)) { found = p; break; }
+  }
+  whichCache.set(bin, { path: found, at: Date.now() });
+  return found;
+}
+
+// 进程完整命令行快照（5s 缓存），用于按 procRe 正则判断 agent 是否在运行
+let procSnap = { at: 0, lines: [] };
+async function procLines() {
+  if (Date.now() - procSnap.at < 5000) return procSnap.lines;
+  const { stdout } = await runCmd('/bin/ps', ['-axo', 'command='], 5000);
+  procSnap = { at: Date.now(), lines: (stdout || '').toLowerCase().split('\n').filter(Boolean) };
+  return procSnap.lines;
+}
+function procRunning(lines, patterns) {
+  const res = (patterns || []).map((p) => new RegExp(p, 'i'));
+  return res.length > 0 && lines.some((l) => res.some((re) => re.test(l)));
+}
+
 // ---------- Agent 注册表 ----------
 // mcpFiles: 候选 MCP 配置文件（JSON，含 mcpServers 键；codex 为 TOML 单独解析）
 // skillDirs: 候选 skill 目录（每个子目录含 SKILL.md 视为一个 skill）
 const AGENTS = [
   {
-    id: 'workbuddy', name: 'WorkBuddy', app: '/Applications/WorkBuddy.app',
+    id: 'workbuddy', name: 'WorkBuddy', app: '/Applications/WorkBuddy.app', procRe: ['workbuddy\\.app/'],
     mcpFiles: [{ path: `${HOME}/.workbuddy/mcp.json`, kind: 'json' }],
     skillDirs: [`${HOME}/.workbuddy/skills`, `${HOME}/.workbuddy/connectors/skills`],
   },
   {
-    id: 'codex', name: 'Codex (ChatGPT)', app: '/Applications/ChatGPT.app',
+    id: 'codex', name: 'Codex (ChatGPT)', app: '/Applications/ChatGPT.app', procRe: ['chatgpt\\.app/'], cli: 'codex',
+    cliCandidates: ['/Applications/ChatGPT.app/Contents/Resources/codex-cli/CodexCLI.app/Contents/MacOS/codex'],
     mcpFiles: [{ path: `${HOME}/.codex/config.toml`, kind: 'toml' }],
     skillDirs: [`${HOME}/.codex/skills`, `${HOME}/.agents/skills`],
   },
   {
-    id: 'devin', name: 'Devin', app: '/Applications/Devin.app',
+    id: 'devin', name: 'Devin', app: '/Applications/Devin.app', procRe: ['devin\\.app/'], cli: 'devin',
+    cliCandidates: ['/Applications/Devin.app/Contents/Resources/app/extensions/windsurf/devin/bin/devin'],
     mcpFiles: [{ path: `${HOME}/.config/devin/mcp_config.json`, kind: 'json' }],
     skillDirs: [`${HOME}/.config/devin/skills`],
     // Devin CLI 会原生导入这些目录的 skill（read-config-from 官方文档）
     importSkillDirs: [`${HOME}/.codex/skills`, `${HOME}/.copilot/skills`, `${HOME}/.kiro/skills`, `${HOME}/.codeium/windsurf/skills`],
   },
   {
-    id: 'windsurf', name: 'Windsurf',
+    id: 'windsurf', name: 'Windsurf', app: '/Applications/Windsurf.app', procRe: ['windsurf\\.app/'],
     mcpFiles: [{ path: `${HOME}/.codeium/windsurf/mcp_config.json`, kind: 'json' }],
     skillDirs: [`${HOME}/.codeium/windsurf/skills`],
   },
   {
-    id: 'claude', name: 'Claude', app: '/Applications/Claude.app',
+    id: 'claude', name: 'Claude', app: '/Applications/Claude.app', procRe: ['claude\\.app/', '\\bclaude\\b'], cli: 'claude',
     mcpFiles: [
       { path: `${HOME}/.claude.json`, kind: 'json' },
       { path: `${HOME}/Library/Application Support/Claude/claude_desktop_config.json`, kind: 'json' },
@@ -143,17 +176,18 @@ const AGENTS = [
     skillDirs: [`${HOME}/.claude/skills`],
   },
   {
-    id: 'cursor', name: 'Cursor', app: '/Applications/Cursor.app',
+    id: 'cursor', name: 'Cursor', app: '/Applications/Cursor.app', procRe: ['cursor\\.app/'],
     mcpFiles: [{ path: `${HOME}/.cursor/mcp.json`, kind: 'json' }],
     skillDirs: [`${HOME}/.cursor/skills`],
   },
   {
-    id: 'gemini', name: 'Gemini CLI',
+    id: 'gemini', name: 'Gemini CLI', procRe: ['\\bgemini\\b'], cli: 'gemini',
     mcpFiles: [{ path: `${HOME}/.gemini/settings.json`, kind: 'json' }],
     skillDirs: [`${HOME}/.gemini/skills`],
   },
   {
-    id: 'hermes', name: 'Hermes', app: '/Applications/Hermes.app',
+    id: 'hermes', name: 'Hermes', app: '/Applications/Hermes.app', procRe: ['hermes\\.app/', 'hermes[-_]agent', 'hermes_cli'], cli: 'hermes',
+    cliCandidates: [`${HOME}/.hermes/hermes-agent/hermes`],
     mcpFiles: [{ path: `${HOME}/.hermes/config.yaml`, kind: 'yaml' }],
     skillDirs: [`${HOME}/.hermes/skills`],
   },
@@ -302,6 +336,8 @@ async function findFiles(dir, filename, maxDepth = 6, depth = 0, out = []) {
 
 async function scanAgents() {
   const agents = [];
+  const procs = await procLines();
+  const hubMcp = `${HUB_URL}/mcp`;
   for (const a of AGENTS) {
     // workbuddy 等插件型 agent：额外扫描插件目录下的 mcp.json
     const extraMcpFiles = [];
@@ -351,12 +387,21 @@ async function scanAgents() {
     }
     if (skills.length) hasSkills = true;
     const appExists = a.app ? await exists(a.app) : false;
+    let cliPath = null;
+    for (const c of a.cliCandidates || []) if (await exists(c)) { cliPath = c; break; }
+    if (!cliPath && a.cli) cliPath = await whichBin(a.cli);
+    const running = a.procRe ? procRunning(procs, a.procRe) : false;
+    // 该 agent 是否已把 MCPHub 网关配进自己的 MCP 配置
+    const mcphub = mcpServers.some((s) => !s.disabled && (/mcphub/i.test(s.name || '') || (s.url || '').includes(hubMcp)));
     agents.push({
       ...a,
       installed: appExists || hasConfig || hasSkills,
       mcpServers,
       skills,
       appExists,
+      cliPath,
+      running,
+      mcphub,
     });
   }
   return agents;
@@ -552,7 +597,133 @@ async function syncAllMcp() {
   return { imported, skipped, failed };
 }
 
+// ---------- 反向代理 ----------
+// 统一入口 /px/<id>/... → 本地 Agent 服务；内置 /px/router → 自动路由器（LLM 统一入口）
+const PROXY_FILE = path.join(DATA_DIR, 'proxy.json');
+
+const PROXY_DEFAULTS = [
+  { id: 'router', name: '自动路由器', prefix: '/px/router', target: 'http://127.0.0.1:8788', enabled: true, builtin: true, note: 'LLM 入口：Agent 的 OpenAI base URL 填 http://127.0.0.1:3100/px/router/v1 即走自动路由' },
+  { id: 'hermes', name: 'Hermes Gateway', prefix: '/px/hermes', target: 'http://127.0.0.1:54900', enabled: true, llmRouter: true },
+  { id: 'mcphub', name: 'MCPHub', prefix: '/px/mcphub', target: 'http://127.0.0.1:3000', enabled: true },
+  { id: 'ollama', name: 'Ollama', prefix: '/px/ollama', target: 'http://127.0.0.1:11434', enabled: true },
+  { id: 'wb-rl', name: 'WorkBuddy·RL项目', prefix: '/px/wb-rl', target: 'http://127.0.0.1:8787', enabled: true },
+  { id: 'wb-app', name: 'WorkBuddy App', prefix: '/px/wb-app', target: 'http://127.0.0.1:61213', enabled: false },
+];
+
+let proxyEntries = [];
+let proxyCache = { t: 0, list: [] };
+
+async function loadProxy() {
+  const saved = (await readJson(PROXY_FILE)) || [];
+  const map = new Map(Array.isArray(saved) ? saved.filter((e) => e && e.id).map((e) => [e.id, e]) : []);
+  for (const d of PROXY_DEFAULTS) if (!map.has(d.id)) map.set(d.id, { ...d });
+  proxyEntries = [...map.values()]
+    .map((e) => ({ enabled: true, ...e, target: String(e.target || '').replace(/\/$/, '') }))
+    .sort((a, b) => b.prefix.length - a.prefix.length);
+}
+
+async function saveProxy() {
+  await mkdir(DATA_DIR, { recursive: true });
+  await writeFile(PROXY_FILE, JSON.stringify(proxyEntries, null, 2));
+  proxyCache.t = 0;
+}
+
+function matchProxy(pathname) {
+  for (const e of proxyEntries) {
+    if (!e.enabled) continue;
+    if (pathname === e.prefix || pathname.startsWith(e.prefix + '/')) return e;
+  }
+  return null;
+}
+
+async function probeTarget(target) {
+  try {
+    await fetch(target, { method: 'GET', redirect: 'manual', signal: AbortSignal.timeout(2500) });
+    return true; // 拿到任意 HTTP 响应即视为可达
+  } catch { return false; }
+}
+
+function proxyHttp(req, res, entry) {
+  const u = new URL(entry.target);
+  const sub = req.url.slice(entry.prefix.length) || '/';
+  const mod = u.protocol === 'https:' ? https : http;
+  const headers = { ...req.headers, host: u.host };
+  const pr = mod.request({
+    hostname: u.hostname, port: u.port || (u.protocol === 'https:' ? 443 : 80),
+    path: sub, method: req.method, headers, timeout: 300000,
+  }, (pres) => {
+    res.writeHead(pres.statusCode || 502, pres.headers);
+    pres.pipe(res); // SSE / chunked 流式透传
+  });
+  pr.on('timeout', () => pr.destroy(new Error('proxy timeout')));
+  pr.on('error', (e) => {
+    if (!res.headersSent) json(res, 502, { error: `代理 ${entry.name} 失败: ${e.message}` });
+    else res.destroy();
+  });
+  req.pipe(pr);
+}
+
 const routes = [
+  // ---- 本地服务代理（/px/<id>/ → target） ----
+  ['GET', /^\/api\/proxy\/list$/, async (req, res) => {
+    const base = `http://localhost:${PORT}`;
+    const list = await Promise.all(proxyEntries.map(async (e) => ({
+      id: e.id, name: e.name, prefix: e.prefix, target: e.target,
+      url: `${base}${e.prefix}`, llmUrl: e.id === 'router' ? `${base}${e.prefix}/v1` : undefined,
+      enabled: !!e.enabled, builtin: !!e.builtin, llmRouter: !!e.llmRouter, note: e.note || '',
+      ok: e.enabled ? await probeTarget(e.target) : null,
+    })));
+    json(res, 200, { entries: list });
+  }],
+  ['GET', /^\/api\/proxy\/scan$/, async (req, res) => {
+    // 扫描本机 TCP 监听端口（lsof），供一键添加为代理
+    const { stdout } = await new Promise((resolve) => {
+      execFile('/usr/sbin/lsof', ['-nP', '-iTCP', '-sTCP:LISTEN'], { timeout: 10000, maxBuffer: 4 * 1024 * 1024 }, (e, so) => resolve({ stdout: so || '' }));
+    });
+    const seen = new Map();
+    for (const line of stdout.split('\n')) {
+      // 末列形如 "TCP *:49756 (LISTEN)" 或 "TCP 127.0.0.1:4709 (LISTEN)"
+      const m = line.match(/^(.+?)\s+(\d+)\s+\S+\s+\S+\s+\S+\s+\S+\s+\S+\s+TCP\s+\S+:(\d+)\s+\(LISTEN\)/);
+      if (!m) continue;
+      const [, proc, pid, port] = m;
+      const p = Number(port);
+      if (!p || p === PORT || seen.has(p)) continue;
+      seen.set(p, { port: p, proc: proc.trim(), pid: Number(pid) });
+    }
+    json(res, 200, { ports: [...seen.values()].sort((a, b) => a.port - b.port) });
+  }],
+  ['POST', /^\/api\/proxy\/(add|update)$/, async (req, res, body, m) => {
+    const { id, name, prefix, target, llmRouter, note, enabled } = body || {};
+    if (!name || !prefix || !target) return json(res, 400, { error: '名称/前缀/目标必填' });
+    const p = String(prefix).trim();
+    if (!p.startsWith('/px/')) return json(res, 400, { error: '前缀必须以 /px/ 开头' });
+    const tgt = String(target).trim().replace(/\/$/, '');
+    const entryId = id || String(name).toLowerCase().replace(/[^\w-]/g, '-');
+    const ex = proxyEntries.find((e) => e.id === entryId || e.prefix === p);
+    if (m[1] === 'add' && ex) return json(res, 400, { error: `已存在: ${ex.id}` });
+    const fields = { name: String(name).trim(), prefix: p, target: tgt, llmRouter: !!llmRouter, note: note || '', enabled: enabled !== false };
+    if (ex) Object.assign(ex, fields);
+    else proxyEntries.push({ id: entryId, ...fields });
+    proxyEntries.sort((a, b) => b.prefix.length - a.prefix.length);
+    await saveProxy();
+    json(res, 200, { ok: true });
+  }],
+  ['POST', /^\/api\/proxy\/toggle$/, async (req, res, body) => {
+    const e = proxyEntries.find((x) => x.id === body?.id);
+    if (!e) return json(res, 404, { error: 'not found' });
+    e.enabled = body.enabled !== undefined ? !!body.enabled : !e.enabled;
+    await saveProxy();
+    json(res, 200, { ok: true, enabled: e.enabled });
+  }],
+  ['POST', /^\/api\/proxy\/delete$/, async (req, res, body) => {
+    const i = proxyEntries.findIndex((x) => x.id === body?.id);
+    if (i === -1) return json(res, 404, { error: 'not found' });
+    if (proxyEntries[i].builtin) return json(res, 400, { error: '内置条目不可删除，可停用' });
+    proxyEntries.splice(i, 1);
+    await saveProxy();
+    json(res, 200, { ok: true });
+  }],
+
   ['POST', /^\/api\/mcp\/sync-all$/, async (req, res) => {
     json(res, 200, await syncAllMcp());
   }],
@@ -573,7 +744,23 @@ const routes = [
 
   // ---- Agent 扫描 ----
   ['GET', /^\/api\/agents$/, async (req, res) => {
-    json(res, 200, { agents: await scanAgents() });
+    const agents = await scanAgents();
+    // 网关健康 + 各 MCP 服务连接状态，供体检页展示
+    let gateway = { ok: false, endpoint: `${HUB_URL}/mcp`, connected: 0, total: 0, servers: [] };
+    try {
+      const r = await hubFetch('GET', '/servers');
+      const list = r.data?.data || r.data || [];
+      const servers = (Array.isArray(list) ? list : []).map((s) => ({
+        name: s.name, status: s.status || (s.enabled === false ? 'disabled' : 'unknown'),
+      }));
+      gateway = {
+        ok: true,
+        connected: servers.filter((s) => /connect|ready/i.test(s.status)).length,
+        total: servers.length,
+        servers,
+      };
+    } catch { /* hubFetch 不抛，但防御一下 */ }
+    json(res, 200, { agents, gateway });
   }],
   ['POST', /^\/api\/agents\/import-mcp$/, async (req, res, body) => {
     const { agentId, serverName } = body || {};
@@ -628,6 +815,102 @@ const routes = [
     } catch (e) {
       json(res, 200, { ok: false, error: String(e) });
     }
+  }],
+
+  // ---- Hermes 自动路由（~/.hermes/router + watchdog 数据） ----
+  ['GET', /^\/api\/router\/status$/, async (req, res) => {
+    const dir = process.env.ROUTER_DIR || `${HOME}/.hermes/router`;
+    const cfg = (await readJson(path.join(dir, 'config.json'))) || {};
+    const [routerOk, ollamaOk] = await Promise.all([
+      fetch(`${cfg.port ? `http://127.0.0.1:${cfg.port}` : 'http://127.0.0.1:8788'}/healthz`, { signal: AbortSignal.timeout(2500) }).then((r) => r.ok).catch(() => false),
+      fetch(`${cfg.ollamaUrl || 'http://127.0.0.1:11434'}/api/tags`, { signal: AbortSignal.timeout(2500) }).then((r) => r.ok).catch(() => false),
+    ]);
+    const routes = {};
+    for (const [name, r] of Object.entries(cfg.routes || {})) {
+      const host = (() => { try { return new URL(r.baseUrl).host; } catch { return r.baseUrl || ''; } })();
+      routes[name] = { model: r.model, fallbacks: (r.fallbacks || []).map((f) => f.model), host };
+    }
+    json(res, 200, { routerOk, ollamaOk, classifier: cfg.classifierModel || '', routes });
+  }],
+  ['GET', /^\/api\/router\/stats$/, async (req, res) => {
+    const dir = process.env.ROUTER_DIR || `${HOME}/.hermes/router`;
+    const logPath = path.join(dir, 'router.log');
+    let lines = [];
+    try { lines = (await readFile(logPath, 'utf8')).trim().split('\n'); } catch { /* 无日志 */ }
+    const today = new Date().toISOString().slice(0, 10);
+    const dayLines = lines.filter((l) => l.includes(today));
+    const counts = {}, tail = dayLines.slice(-40);
+    let fails = 0, stick = 0;
+    for (const l of dayLines) {
+      const m = l.match(/route=(\w+)/);
+      if (m) counts[m[1]] = (counts[m[1]] || 0) + 1;
+      if (/ FAIL /.test(l)) fails++;
+      if (/ stick=1 /.test(l)) stick++;
+    }
+    json(res, 200, { date: today, total: dayLines.length, counts, fails, stick, tail });
+  }],
+  ['GET', /^\/api\/router\/trend$/, async (req, res) => {
+    const dir = process.env.ROUTER_DIR || `${HOME}/.hermes/router`;
+    const logPath = path.join(dir, 'router.log');
+    let lines = [];
+    try { lines = (await readFile(logPath, 'utf8')).trim().split('\n'); } catch { /* 无日志 */ }
+    const days = {};
+    for (const l of lines) {
+      const dm = l.match(/\[router\] (\d{4}-\d{2}-\d{2})T/);
+      if (!dm) continue;
+      const d = dm[1];
+      if (!days[d]) days[d] = { date: d, total: 0, fails: 0, counts: {} };
+      const day = days[d];
+      day.total++;
+      const rm = l.match(/route=(\w+)/);
+      if (rm) day.counts[rm[1]] = (day.counts[rm[1]] || 0) + 1;
+      if (/ FAIL /.test(l)) day.fails++;
+    }
+    const out = [];
+    for (let i = 6; i >= 0; i--) {
+      const d = new Date(Date.now() - i * 86400000).toISOString().slice(0, 10);
+      out.push(days[d] || { date: d, total: 0, fails: 0, counts: {} });
+    }
+    json(res, 200, { days: out, routes: ['simple', 'coding', 'complex', 'expert'] });
+  }],
+  ['GET', /^\/api\/router\/balance$/, async (req, res) => {
+    const wd = process.env.WATCHDOG_DIR || `${HOME}/.hermes/watchdog`;
+    const script = path.join(wd, 'balance_check.py');
+    try {
+      const { stdout } = await new Promise((resolve, reject) => {
+        execFile('/usr/bin/python3', [script], { timeout: 90000, maxBuffer: 4 * 1024 * 1024 }, (e, so) => e ? reject(e) : resolve({ stdout: so }));
+      });
+      json(res, 200, JSON.parse(stdout));
+    } catch (e) {
+      json(res, 200, { error: `balance_check 失败: ${e.message}` });
+    }
+  }],
+  ['GET', /^\/api\/router\/digests$/, async (req, res) => {
+    const wd = process.env.WATCHDOG_DIR || `${HOME}/.hermes/watchdog`;
+    try {
+      const files = (await readdir(wd)).filter((f) => /^digest-\d{8}\.md$/.test(f)).sort().reverse();
+      const digests = [];
+      for (const f of files.slice(0, 14)) {
+        const st = await stat(path.join(wd, f));
+        digests.push({ name: f.replace(/^digest-|\.md$/g, ''), file: f, mtime: st.mtime.toISOString() });
+      }
+      json(res, 200, { digests });
+    } catch { json(res, 200, { digests: [] }); }
+  }],
+  ['GET', /^\/api\/router\/digest$/, async (req, res, body, m, url) => {
+    const name = String(url.searchParams.get('name') || '');
+    if (!/^\d{8}$/.test(name)) return json(res, 400, { error: '非法 name' });
+    const wd = process.env.WATCHDOG_DIR || `${HOME}/.hermes/watchdog`;
+    try {
+      const content = await readFile(path.join(wd, `digest-${name}.md`), 'utf8');
+      json(res, 200, { name, content });
+    } catch { json(res, 404, { error: '日报不存在' }); }
+  }],
+  ['POST', /^\/api\/router\/restart$/, async (req, res) => {
+    // 路由器由 launchd 服务 ai.hermes.router 托管，kickstart 即可优雅重启
+    execFile('launchctl', ['kickstart', '-k', `gui/${process.getuid()}/ai.hermes.router`], { timeout: 10000 }, (e) => {
+      json(res, e ? 500 : 200, e ? { ok: false, error: String(e.message || e) } : { ok: true });
+    });
   }],
 
   // ---- 生态系统底层注入状态 ----
@@ -865,6 +1148,92 @@ const routes = [
       json(res, 200, { name, content });
     } catch (e) { json(res, 404, { error: String(e) }); }
   }],
+  // ---------- 反向代理管理 ----------
+  ['GET', /^\/api\/proxy\/list$/, async (req, res) => {
+    await loadProxy();
+    if (Date.now() - proxyCache.t > 10000 || !proxyCache.list.length) {
+      const base = config.agentManagerUrl.replace(/\/$/, '');
+      proxyCache.list = await Promise.all(proxyEntries.map(async (e) => ({
+        ...e,
+        ok: await probeTarget(e.target),
+        url: `${base}${e.prefix}/`,
+        llmUrl: e.id === 'router' ? `${base}${e.prefix}/v1` : null,
+      })));
+      proxyCache.t = Date.now();
+    }
+    json(res, 200, { entries: proxyCache.list });
+  }],
+  ['POST', /^\/api\/proxy\/add$/, async (req, res, body) => {
+    const { name, prefix, target, llmRouter, note } = body || {};
+    const p = String(prefix || '').trim();
+    if (!name || !String(name).trim()) return json(res, 400, { error: '缺少名称' });
+    if (!/^\/px\/[a-z0-9][a-z0-9-]{0,30}$/.test(p)) return json(res, 400, { error: '前缀须形如 /px/my-agent（小写字母/数字/中划线）' });
+    let u;
+    try { u = new URL(String(target || '').trim()); } catch { return json(res, 400, { error: '目标地址无效' }); }
+    if (!/^https?:$/.test(u.protocol)) return json(res, 400, { error: '仅支持 http/https' });
+    await loadProxy();
+    if (proxyEntries.some((e) => e.prefix === p)) return json(res, 409, { error: '前缀已被占用' });
+    proxyEntries.push({
+      id: p.slice(4), name: String(name).trim(), prefix: p,
+      target: String(target).trim().replace(/\/$/, ''), enabled: true,
+      llmRouter: !!llmRouter, note: String(note || ''),
+    });
+    proxyEntries.sort((a, b) => b.prefix.length - a.prefix.length);
+    await saveProxy();
+    json(res, 200, { ok: true });
+  }],
+  ['POST', /^\/api\/proxy\/update$/, async (req, res, body) => {
+    const { id } = body || {};
+    await loadProxy();
+    const e = proxyEntries.find((x) => x.id === id);
+    if (!e) return json(res, 404, { error: '条目不存在' });
+    if (body.name !== undefined) e.name = String(body.name).trim() || e.name;
+    if (body.target !== undefined) {
+      try { new URL(String(body.target).trim()); } catch { return json(res, 400, { error: '目标地址无效' }); }
+      e.target = String(body.target).trim().replace(/\/$/, '');
+    }
+    if (body.prefix !== undefined) {
+      const p = String(body.prefix).trim();
+      if (!/^\/px\/[a-z0-9][a-z0-9-]{0,30}$/.test(p)) return json(res, 400, { error: '前缀格式无效' });
+      if (proxyEntries.some((x) => x !== e && x.prefix === p)) return json(res, 409, { error: '前缀已被占用' });
+      e.prefix = p;
+    }
+    if (body.note !== undefined) e.note = String(body.note || '');
+    if (body.llmRouter !== undefined) e.llmRouter = !!body.llmRouter;
+    proxyEntries.sort((a, b) => b.prefix.length - a.prefix.length);
+    await saveProxy();
+    json(res, 200, { ok: true });
+  }],
+  ['POST', /^\/api\/proxy\/delete$/, async (req, res, body) => {
+    const { id } = body || {};
+    await loadProxy();
+    const e = proxyEntries.find((x) => x.id === id);
+    if (!e) return json(res, 404, { error: '条目不存在' });
+    if (e.builtin) return json(res, 400, { error: '内置条目不可删除，可停用' });
+    proxyEntries = proxyEntries.filter((x) => x.id !== id);
+    await saveProxy();
+    json(res, 200, { ok: true });
+  }],
+  ['POST', /^\/api\/proxy\/toggle$/, async (req, res, body) => {
+    const { id, enabled } = body || {};
+    await loadProxy();
+    const e = proxyEntries.find((x) => x.id === id);
+    if (!e) return json(res, 404, { error: '条目不存在' });
+    e.enabled = !!enabled;
+    await saveProxy();
+    json(res, 200, { ok: true });
+  }],
+  ['GET', /^\/api\/proxy\/scan$/, async (req, res) => {
+    const r = await runCmd('/usr/sbin/lsof', ['-nP', '-iTCP', '-sTCP:LISTEN']);
+    const out = [];
+    for (const line of (r.stdout || '').split('\n').slice(1)) {
+      const m = line.match(/^(\S+)\s+(\d+)\s.*TCP\s+(?:\*|(?:\d+\.){3}\d+|\[::\]):(\d+)\s+\(LISTEN\)/);
+      if (!m) continue;
+      const [, proc, pid, port] = m;
+      out.push({ proc, pid: Number(pid), port: Number(port) });
+    }
+    json(res, 200, { ports: out });
+  }],
 ];
 
 const MIME = { '.html': 'text/html; charset=utf-8', '.js': 'text/javascript', '.css': 'text/css', '.svg': 'image/svg+xml', '.png': 'image/png', '.json': 'application/json' };
@@ -889,6 +1258,9 @@ const server = http.createServer(async (req, res) => {
       }
       return json(res, 404, { error: 'Not found' });
     }
+    // /px/<id>/ 本地服务代理（SSE/流式透传）
+    const px = matchProxy(url.pathname);
+    if (px) return proxyHttp(req, res, px);
     let fp = path.join(__dirname, 'public', url.pathname === '/' ? 'index.html' : decodeURIComponent(url.pathname));
     if (!fp.startsWith(path.join(__dirname, 'public'))) return json(res, 403, { error: 'Forbidden' });
     try {
@@ -958,10 +1330,42 @@ async function ensureBuiltinInfra() {
   } catch (e) { console.log('[builtin] bootstrap failed:', e.message); }
 }
 
+// WebSocket 升级走反代（MCP/Agent 实时通道）
+server.on('upgrade', (req, socket, head) => {
+  const entry = matchProxy(new URL(req.url, `http://localhost:${PORT}`).pathname);
+  if (!entry) { socket.destroy(); return; }
+  let u;
+  try { u = new URL(entry.target); } catch { socket.destroy(); return; }
+  const isHttps = u.protocol === 'https:';
+  const mod = isHttps ? https : http;
+  const up = mod.request({
+    hostname: u.hostname, port: u.port || (isHttps ? 443 : 80),
+    path: req.url.slice(entry.prefix.length) || '/', method: 'GET',
+    headers: { ...req.headers, host: u.host }, timeout: 300000,
+  });
+  up.on('upgrade', (ures, us, uhead) => {
+    const lines = ['HTTP/1.1 101 Switching Protocols'];
+    for (const [k, v] of Object.entries(ures.headers)) lines.push(`${k}: ${Array.isArray(v) ? v.join(', ') : v}`);
+    socket.write(lines.join('\r\n') + '\r\n\r\n');
+    if (uhead && uhead.length) socket.write(uhead);
+    us.pipe(socket); socket.pipe(us);
+    socket.on('error', () => us.destroy());
+    us.on('error', () => socket.destroy());
+  });
+  up.on('response', (pres) => {
+    pres.resume(); // 目标不支持 WebSocket 升级
+    socket.end('HTTP/1.1 502 Bad Gateway\r\nContent-Type: application/json\r\n\r\n{"error":"proxy upgrade refused"}');
+  });
+  up.on('timeout', () => { up.destroy(); socket.destroy(); });
+  up.on('error', () => socket.destroy());
+  up.end();
+});
+
 server.listen(PORT, '127.0.0.1', () => {
   console.log(`Agent Manager running at http://localhost:${PORT}`);
   console.log(`MCPHub: ${HUB_URL}  asm: ${ASM}`);
   initOrchestrator().catch((e) => console.log('[orch] init failed:', e.message));
+  loadProxy().then(() => console.log(`[proxy] ${proxyEntries.filter((e) => e.enabled).length} 条代理已加载`)).catch((e) => console.log('[proxy] load failed:', e.message));
   ensureBuiltinInfra().catch((e) => console.log('[builtin] failed:', e.message));
 });
 

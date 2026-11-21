@@ -242,10 +242,11 @@ async function stepTask(task) {
       return;
     }
     // planner 验收
-    const v = await plannerChat(task, '所有子任务已完成。请验收整体目标是否达成: verify(pass=true/false, feedback)。若未完全达成请说明差距。');
-    if (v.action === 'verify' && v.pass) {
+    const v = await plannerChat(task, '所有子任务已完成。请验收整体目标是否达成: verify(pass=true/false, feedback)。若未完全达成请说明差距。若已完全达成也可直接返回 done+summary。');
+    // planner 可能返回 verify(pass=true) 或直接 done+summary，两者都视为验收通过
+    if ((v.action === 'verify' && v.pass) || v.action === 'done') {
       task.status = 'done';
-      task.summary = v.feedback || '';
+      task.summary = v.feedback || v.summary || '';
       log(task, 'info', '验收通过: ' + (v.feedback || '').slice(0, 200));
       await maybeContinue(task);
     } else if (v.action === 'verify' && !v.pass && (task.repairs || 0) < state.config.maxRepairs) {
@@ -264,7 +265,8 @@ async function stepTask(task) {
   }
 
   // 4) 派发就绪步骤（deps 已 done、status pending、并发未满）
-  const runningCount = [...pend.values()].length + steps.filter((s) => s.status === 'running').length;
+  // pend 与 status='running' 是同一批在途步骤，不能重复计数（否则并发额度减半）
+  const runningCount = steps.filter((s) => s.status === 'running').length;
   const capacity = Math.max(0, state.config.maxConcurrent - runningCount);
   if (capacity <= 0) return;
 
@@ -335,6 +337,12 @@ async function maybeContinue(task) {
 // ---------- api ----------
 export async function initOrchestrator() {
   await load();
+  // 重启恢复：上次进程内的在途派发已丢失，把卡在 running 的步骤重置为 pending 重新执行
+  let recovered = 0;
+  for (const t of state.tasks) for (const s of t.plan || []) {
+    if (s.status === 'running') { s.status = 'pending'; s.result = undefined; recovered++; }
+  }
+  if (recovered) { await save(); console.log(`[orch] recovered ${recovered} stale running steps`); }
   setInterval(() => { tick().catch((e) => console.log('[orch] tick:', e.message)); }, (state.config.tickSeconds || 15) * 1000).unref();
   console.log(`[orch] loaded ${state.tasks.length} tasks, enabled=${state.config.enabled}`);
 }

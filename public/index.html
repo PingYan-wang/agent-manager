@@ -117,6 +117,16 @@
   .muted{color:var(--muted);font-size:11.5px}
   code,.mono{font-family:var(--mono)}
 
+  /* ---- 页内子标签 ---- */
+  .subtabs{display:flex;gap:2px;margin-bottom:16px;border-bottom:1px solid var(--line)}
+  .subtab{
+    background:none;border:none;color:var(--muted);cursor:pointer;
+    padding:8px 14px;font-size:13px;position:relative;transition:color .15s;
+  }
+  .subtab:hover{color:var(--ink)}
+  .subtab.active{color:var(--ink);font-weight:600}
+  .subtab.active::after{content:"";position:absolute;left:14px;right:14px;bottom:-1px;height:2px;background:var(--accent)}
+
   /* ---- Agent 卡片 ---- */
   .agent-grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(360px,1fr));gap:14px}
   .agent-card{
@@ -201,11 +211,10 @@
   <nav>
     <button data-tab="agents" class="active">Agent 体检</button>
     <button data-tab="mcp">MCP 服务</button>
-    <button data-tab="mcpmkt">MCP 市场</button>
     <button data-tab="skills">已安装 Skills</button>
-    <button data-tab="market">Skills 市场</button>
     <button data-tab="orch">任务编排</button>
     <button data-tab="router">自动路由</button>
+    <button data-tab="proxy">反代</button>
   </nav>
 </header>
 <main>
@@ -213,13 +222,20 @@
     <div class="card">
       <div class="toolbar">
         <h3>已检测到的 Agent · MCP / Skill 清单</h3>
+        <span class="muted" id="agentGw" style="margin-left:12px"></span>
         <button class="ghost" style="margin-left:auto" onclick="loadAgents()">↻ 重新扫描</button>
       </div>
+      <div id="agentGwServers" style="display:flex;gap:6px;flex-wrap:wrap;margin-bottom:12px"></div>
       <div id="agentList"><div class="empty">扫描中…</div></div>
     </div>
   </section>
 
   <section id="tab-mcp" style="display:none">
+    <div class="subtabs">
+      <button class="subtab active" data-mcpview="main">服务列表</button>
+      <button class="subtab" data-mcpview="market">市场</button>
+    </div>
+    <div id="mcpView-main">
     <div class="card">
       <div class="toolbar">
         <button class="btn" onclick="openServerForm()">+ 添加 MCP 服务</button>
@@ -235,9 +251,8 @@
 Dashboard:  http://localhost:3000  (账号见 MCPHub Dashboard)
 已配置: Codex · Devin · Windsurf</pre>
     </div>
-  </section>
-
-  <section id="tab-mcpmkt" style="display:none">
+    </div>
+    <div id="mcpView-market" style="display:none">
     <div class="card">
       <div class="toolbar">
         <input id="mcpMktSearch" placeholder="搜索官方 Registry，如 filesystem、github、postgres…（≥3 字符）" style="flex:1;min-width:260px" onkeydown="if(event.key==='Enter')searchMcpMarket()">
@@ -248,9 +263,15 @@ Dashboard:  http://localhost:3000  (账号见 MCPHub Dashboard)
       <div class="muted" style="margin-bottom:10px;font-size:11.5px">数据源：<a href="https://registry.modelcontextprotocol.io" target="_blank" style="color:var(--accent)">Official MCP Registry</a> · 安装即写入 MCPHub，所有接入 Agent 自动可用</div>
       <div id="mcpMktList"><div class="empty">点击「浏览全部」或输入关键词搜索</div></div>
     </div>
+    </div>
   </section>
 
   <section id="tab-skills" style="display:none">
+    <div class="subtabs">
+      <button class="subtab active" data-skview="main">已安装</button>
+      <button class="subtab" data-skview="market">市场</button>
+    </div>
+    <div id="skView-main">
     <div class="card">
       <div class="toolbar">
         <button class="btn" onclick="openInstallModal()">+ 安装 / 导入 Skill</button>
@@ -260,16 +281,17 @@ Dashboard:  http://localhost:3000  (账号见 MCPHub Dashboard)
       </div>
       <div id="skillList"><div class="empty">加载中…</div></div>
     </div>
-  </section>
-
-  <section id="tab-market" style="display:none">
+    </div>
+    <div id="skView-market" style="display:none">
     <div class="card">
       <div class="toolbar">
         <select id="searchSrc"><option value="asm">asm 索引</option><option value="sh">skills.sh</option></select>
         <input id="skillSearch" placeholder="搜索 skill，如 playwright、code-review…" style="flex:1;min-width:240px" onkeydown="if(event.key==='Enter')searchSkills()">
         <button class="btn" onclick="searchSkills()">搜索</button>
       </div>
+      <div class="muted" style="margin-bottom:10px;font-size:11.5px">数据源：asm 索引 / <a href="https://skills.sh" target="_blank" style="color:var(--accent)">skills.sh</a> 社区 · 安装后自动同步到所有 Agent</div>
       <div id="marketList"><div class="empty">输入关键词搜索社区 skill</div></div>
+    </div>
     </div>
   </section>
 
@@ -312,12 +334,35 @@ Dashboard:  http://localhost:3000  (账号见 MCPHub Dashboard)
       <pre class="mono" id="routerLog" style="margin-top:6px;max-height:220px;overflow:auto;background:var(--surface2);border:1px solid var(--line);border-radius:var(--r-sm);padding:10px;font-size:11px;white-space:pre-wrap;word-break:break-all"></pre>
     </div>
     <div class="card">
+      <div class="toolbar"><h3>近 7 天用量趋势</h3><span class="muted" id="routerTrendMeta" style="margin-left:auto"></span></div>
+      <div id="routerTrend"><div class="empty">加载中…</div></div>
+      <div id="routerTrendLegend" style="margin-top:10px;display:flex;gap:14px;flex-wrap:wrap;font-size:12px"></div>
+    </div>
+    <div class="card">
       <div class="toolbar"><h3>上游余额 / 健康</h3><span class="muted" id="routerBalanceTime" style="margin-left:auto"></span></div>
       <div id="routerBalance"><div class="empty">加载中…</div></div>
     </div>
     <div class="card">
       <div class="toolbar"><h3>巡检日报</h3><span class="muted" style="margin-left:auto">每天 21:00 由本地看门狗生成</span></div>
       <div id="routerDigests"><div class="empty">加载中…</div></div>
+    </div>
+  </section>
+
+  <section id="tab-proxy" style="display:none">
+    <div class="card">
+      <div class="toolbar">
+        <h3>本地服务反代</h3>
+        <span class="muted" style="margin-left:auto">统一入口 /px/&lt;id&gt;/ 转发到本地 Agent 服务，支持 HTTP 与 WebSocket</span>
+        <button class="ghost" onclick="proxyScan()">扫描本地端口</button>
+        <button onclick="proxyForm()">＋ 添加代理</button>
+      </div>
+      <div id="proxyList"><div class="empty">加载中…</div></div>
+    </div>
+    <div class="card">
+      <h3>LLM 路由联动</h3>
+      <p class="muted" style="margin:6px 0 10px">任意 Agent 的 LLM Base URL 指向下列地址，即走自动路由（按任务自动选择 simple / coding / complex / expert，各 Agent 无需单独配置上游密钥）：</p>
+      <div class="mono" id="proxyLlmUrl" style="background:var(--surface2);border:1px solid var(--line);border-radius:var(--r-sm);padding:10px;font-size:12px;user-select:all"></div>
+      <p class="muted" style="margin-top:8px">Hermes 已直连路由器（127.0.0.1:8788）；其他 Agent（WorkBuddy、自建脚本等）改用上面的代理地址即可。</p>
     </div>
   </section>
 </main>
@@ -343,26 +388,55 @@ $('#modal').addEventListener('click', e => { if(e.target.id==='modal') closeModa
 document.querySelectorAll('nav button').forEach(b => b.onclick = () => {
   document.querySelectorAll('nav button').forEach(x=>x.classList.remove('active'));
   b.classList.add('active');
-  ['agents','mcp','mcpmkt','skills','market','orch','router'].forEach(t => $('#tab-'+t).style.display = t===b.dataset.tab?'':'none');
+  ['agents','mcp','skills','orch','router','proxy'].forEach(t => $('#tab-'+t).style.display = t===b.dataset.tab?'':'none');
   if(b.dataset.tab==='agents') loadAgents();
-  if(b.dataset.tab==='mcp') loadServers();
-  if(b.dataset.tab==='mcpmkt') loadMcpMarket();
-  if(b.dataset.tab==='skills') loadSkills();
+  if(b.dataset.tab==='mcp'){ setSub('mcp','main'); loadServers(); }
+  if(b.dataset.tab==='skills'){ setSub('skills','main'); loadSkills(); }
   if(b.dataset.tab==='orch') loadOrch();
   if(b.dataset.tab==='router') loadRouter();
+  if(b.dataset.tab==='proxy') loadProxy();
+});
+
+// ---------- 页内子标签（市场嵌入） ----------
+function setSub(kind, view){
+  const main = kind==='mcp' ? '#mcpView-main' : '#skView-main';
+  const market = kind==='mcp' ? '#mcpView-market' : '#skView-market';
+  const attr = kind==='mcp' ? 'mcpview' : 'skview';
+  document.querySelectorAll(`.subtab[data-${attr}]`).forEach(b => b.classList.toggle('active', b.dataset[attr]===view));
+  $(main).style.display = view==='main' ? '' : 'none';
+  $(market).style.display = view==='market' ? '' : 'none';
+  if(view==='market'){
+    if(kind==='mcp' && !window._mcpMktLoaded) { window._mcpMktLoaded = true; loadMcpMarket(); }
+    if(kind==='skills' && !window._skMktLoaded) { window._skMktLoaded = true; }
+  }
+}
+document.addEventListener('click', e => {
+  const sm = e.target.closest('.subtab[data-mcpview]');
+  if(sm){ setSub('mcp', sm.dataset.mcpview); return; }
+  const ss = e.target.closest('.subtab[data-skview]');
+  if(ss){ setSub('skills', ss.dataset.skview); return; }
 });
 
 // ---------- Agent 体检 ----------
 const fold = (key, label, count, inner, open) => `
   <div class="fold${open?' open':''}" data-fold="${key}">
-    <button class="fold-head" type="button"><span class="chev">▶</span>${label}<span class="n">${count}</span></button>
+    <button class="fold-head" type="button"><span class="chev">▶</span>${label}${count!==undefined&&count!==null&&count!==''?`<span class="n">${count}</span>`:''}</button>
     <div class="fold-body"><div class="fold-inner">${inner}</div></div>
   </div>`;
 
 async function loadAgents(){
   const r = await api('/api/agents');
   const list = r.agents||[];
+  const gw = r.gateway || {};
+  $('#agentGw').textContent = gw.ok ? `网关 ${gw.connected}/${gw.total} 服务在线` : 'MCPHub 离线';
+  $('#agentGwServers').innerHTML = (gw.servers||[]).map(s=>
+    `<span class="badge ${/connect|ready/i.test(s.status)?'on':(s.status==='disabled'?'':'warn')}">${esc(s.name)} · ${esc(s.status)}</span>`).join('');
   $('#agentList').innerHTML = '<div class="agent-grid">' + list.map(a=>{
+    const connInner = `<table class="mini-table"><tr><th>项目</th><th>状态</th><th>详情</th></tr>
+      <tr><td>应用</td><td>${a.appExists?'<span class="badge on">已安装</span>':'<span class="badge off">未安装</span>'}</td><td class="path">${esc(a.app||'—')}</td></tr>
+      ${a.cli?`<tr><td>CLI</td><td>${a.cliPath?'<span class="badge on">可用</span>':'<span class="badge off">未找到</span>'}</td><td class="path">${esc(a.cliPath||a.cli)}</td></tr>`:''}
+      <tr><td>进程</td><td>${a.running?'<span class="badge on">运行中</span>':'<span class="badge">未运行</span>'}</td><td class="muted">—</td></tr>
+      <tr><td>MCPHub</td><td>${a.mcphub?'<span class="badge on">已接入</span>':'<span class="badge warn">未接入</span>'}</td><td class="path">${esc(gw.endpoint||'')}</td></tr></table>`;
     const mcpInner = a.mcpServers.length ? `<table class="mini-table"><tr><th>名称</th><th>类型</th><th>地址/命令</th><th></th></tr>` + a.mcpServers.map(s=>`
       <tr><td class="mono">${esc(s.name)}${s.disabled?' <span class="badge off">禁用</span>':''}</td>
       <td><span class="badge">${esc(s.transport||s.kind)}</span></td>
@@ -380,7 +454,10 @@ async function loadAgents(){
     return `<div class="agent-card ${a.installed?'':'disabled'}">
       <div class="agent-head"><span class="name">${esc(a.name)}</span>
         ${a.installed?'<span class="badge on">已安装</span>':'<span class="badge off">未安装</span>'}
+        ${a.running?'<span class="badge on">运行中</span>':'<span class="badge">未运行</span>'}
+        ${a.mcphub?'<span class="badge on">网关已接入</span>':''}
         <span class="cnt">${a.mcpServers.length} MCP · ${a.skills.length} SKILL</span></div>
+      ${fold('c'+a.id,'连接状态',null,connInner)}
       ${fold('m'+a.id,'MCP Servers',a.mcpServers.length,mcpInner,a.mcpServers.length<=3)}
       ${fold('s'+a.id,'Skills',a.skills.length,skillInner,a.skills.length<=3)}
       ${!a.mcpServers.length&&!a.skills.length?'<div class="muted">该 agent 暂无 MCP / skill 配置</div>':''}
@@ -730,13 +807,14 @@ document.addEventListener('click', e => {
 
 // ---------- 自动路由 ----------
 async function loadRouter(){
-  const [st, ss, bl, dg] = await Promise.all([
-    api('/api/router/status'), api('/api/router/stats'), api('/api/router/balance'), api('/api/router/digests')
+  const [st, ss, bl, dg, tr] = await Promise.all([
+    api('/api/router/status'), api('/api/router/stats'), api('/api/router/balance'), api('/api/router/digests'), api('/api/router/trend')
   ]);
   renderRouterStatus(st);
   renderRouterStats(ss);
   renderRouterBalance(bl);
   renderRouterDigests(dg);
+  renderRouterTrend(tr);
 }
 function renderRouterStatus(st){
   if(!st || st.error){ $('#routerStatus').innerHTML = `<div class="empty">${esc((st&&st.error)||'加载失败')}</div>`; return; }
@@ -754,10 +832,18 @@ function renderRouterStatus(st){
 function renderRouterStats(ss){
   if(!ss || ss.error){ $('#routerStats').innerHTML = `<div class="empty">${esc((ss&&ss.error)||'加载失败')}</div>`; return; }
   const chips = Object.entries(ss.counts||{}).map(([k,v])=>`<span class="badge">${esc(k)} × ${v}</span>`).join(' ');
-  $('#routerStats').innerHTML = `<div style="display:flex;gap:8px;flex-wrap:wrap;align-items:center">
-    <span class="badge ${ss.fails?'warn':'on'}">${esc(ss.date)} 共 ${ss.total} 次</span>${chips}
+  const total = ss.total || 0;
+  const share = Object.entries(ss.counts || {}).map(([k, v]) => {
+    const pct = total ? Math.round(v / total * 100) : 0;
+    return `<div style="display:flex;align-items:center;gap:8px;margin:4px 0;font-size:12px">
+      <span style="width:64px">${esc(k)}</span>
+      <div style="flex:1;height:9px;background:var(--surface2);border-radius:4px;overflow:hidden"><div style="width:${pct}%;height:100%;background:${ROUTE_COLORS[k] || '#888'}"></div></div>
+      <span class="mono" style="width:56px;text-align:right">${v} · ${pct}%</span></div>`;
+  }).join('');
+  $('#routerStats').innerHTML = `<div style="display:flex;gap:8px;flex-wrap:wrap;align-items:center;margin-bottom:8px">
+    <span class="badge ${ss.fails?'warn':'on'}">${esc(ss.date)} 共 ${total} 次</span>${chips}
     <span class="badge ${ss.fails?'warn':'on'}">失败 ${ss.fails}</span>
-    <span class="badge">会话粘性 ${ss.stick}</span></div>`;
+    <span class="badge">会话粘性 ${ss.stick}</span></div>${share}`;
   $('#routerLog').textContent = (ss.tail||[]).join('\n') || '（暂无日志）';
 }
 function renderRouterBalance(bl){
@@ -794,6 +880,124 @@ async function routerRestart(){
   const r = await api('/api/router/restart', {method:'POST', body:{}});
   toast(r.ok ? '路由器已重启' : '重启失败', !r.ok);
   setTimeout(loadRouter, 1500);
+}
+
+const ROUTE_COLORS = { simple: '#4f8cff', coding: '#3fb96b', complex: '#9b6bff', expert: '#e5534b' };
+function renderRouterTrend(t){
+  if (!t || !t.days) { $('#routerTrend').innerHTML = '<div class="empty">加载失败</div>'; return; }
+  const max = Math.max(1, ...t.days.map(d => d.total || 0));
+  const weekTotal = t.days.reduce((a, d) => a + (d.total || 0), 0);
+  $('#routerTrendMeta').textContent = `7 天合计 ${weekTotal} 次`;
+  const rows = t.days.map(d => {
+    const total = d.total || 0;
+    const h = Math.max(6, Math.round((total / max) * 22));
+    const segs = (t.routes || []).map(r => {
+      const v = (d.counts || {})[r] || 0;
+      if (!v || !total) return '';
+      return `<div style="height:100%;width:${(v / total * 100).toFixed(1)}%;background:${ROUTE_COLORS[r] || '#888'}" title="${r}: ${v}"></div>`;
+    }).join('');
+    const fails = d.fails ? `<span class="badge warn" style="font-size:10px">失败${d.fails}</span>` : '';
+    return `<div style="display:flex;align-items:center;gap:10px;margin:6px 0">
+      <span class="mono" style="width:44px;font-size:11px">${esc((d.date || '').slice(5))}</span>
+      <div style="flex:1;height:${h}px;background:var(--surface2);border-radius:4px;overflow:hidden;display:flex">${total ? segs : '<div class="muted" style="font-size:10px;align-self:center;padding-left:6px">无请求</div>'}</div>
+      <span class="mono" style="width:40px;text-align:right;font-size:11px">${total}</span>${fails}
+    </div>`;
+  }).join('');
+  $('#routerTrend').innerHTML = rows;
+  $('#routerTrendLegend').innerHTML = (t.routes || []).map(r =>
+    `<span><span style="display:inline-block;width:10px;height:10px;border-radius:2px;background:${ROUTE_COLORS[r] || '#888'};margin-right:4px"></span>${esc(r)}</span>`).join('');
+}
+
+// ---------- 反向代理 ----------
+let proxyData = [];
+async function loadProxy(){
+  const r = await api('/api/proxy/list');
+  proxyData = (r && r.entries) || [];
+  renderProxy();
+  const router = proxyData.find(e => e.id === 'router');
+  if (router) $('#proxyLlmUrl').textContent = router.llmUrl || '';
+}
+function renderProxy(){
+  if (!proxyData.length) { $('#proxyList').innerHTML = '<div class="empty">无代理条目</div>'; return; }
+  const rows = proxyData.map(e => `
+    <tr>
+      <td><span class="badge ${!e.enabled ? 'off' : (e.ok ? 'on' : 'warn')}">${!e.enabled ? '停用' : e.ok ? '在线' : '离线'}</span></td>
+      <td class="name">${esc(e.name)}${e.builtin ? ' <span class="muted">内置</span>' : ''}${e.llmRouter ? ' <span class="badge">LLM→路由</span>' : ''}</td>
+      <td class="mono">${esc(e.prefix)}</td>
+      <td class="path">${esc(e.target)}</td>
+      <td class="mono" style="font-size:11px">${esc(e.url || '')}</td>
+      <td style="white-space:nowrap">
+        <button class="ghost" onclick="proxyToggle('${esc(e.id)}',${!e.enabled})">${e.enabled ? '停用' : '启用'}</button>
+        <button class="ghost" onclick="proxyCopy('${esc(e.url || '')}')">复制</button>
+        <button class="ghost" onclick="proxyForm('${esc(e.id)}')">编辑</button>
+        ${e.builtin ? '' : `<button class="ghost" onclick="proxyDel('${esc(e.id)}')">删除</button>`}
+      </td>
+    </tr>`).join('');
+  $('#proxyList').innerHTML = `<table><tr><th>状态</th><th>名称</th><th>前缀</th><th>目标</th><th>代理地址</th><th>操作</th></tr>${rows}</table>`;
+}
+async function proxyToggle(id, enabled){
+  const r = await api('/api/proxy/toggle', { method: 'POST', body: { id, enabled } });
+  if (r && r.ok) loadProxy(); else toast((r && r.error) || '操作失败', true);
+}
+async function proxyDel(id){
+  if (!confirm('删除该代理条目？')) return;
+  const r = await api('/api/proxy/delete', { method: 'POST', body: { id } });
+  toast((r && r.ok) ? '已删除' : ((r && r.error) || '删除失败'), !(r && r.ok));
+  loadProxy();
+}
+function proxyCopy(t){
+  if (!t) return;
+  navigator.clipboard.writeText(t).then(() => toast('已复制'));
+}
+let pxPreset = null;
+function proxyForm(id, preset){
+  pxPreset = preset || null;
+  const e = proxyData.find(x => x.id === id) || {};
+  const val = (cur, pre, dft) => esc(id ? (cur || dft) : (pre || dft));
+  modal(`<h3 style="margin-bottom:10px">${id ? '编辑代理' : '添加代理'}</h3>
+  <div style="display:grid;gap:10px">
+    <label>名称<br><input id="pxName" value="${val(e.name)}" style="width:100%"></label>
+    <label>前缀（形如 /px/my-agent）<br><input id="pxPrefix" value="${val(e.prefix, pxPreset && pxPreset.prefix, '/px/')}" style="width:100%"></label>
+    <label>目标地址<br><input id="pxTarget" value="${val(e.target, pxPreset && pxPreset.target, 'http://127.0.0.1:')}" style="width:100%" placeholder="http://127.0.0.1:3000"></label>
+    <label><input type="checkbox" id="pxLlm" ${e.llmRouter || (pxPreset && pxPreset.llmRouter) ? 'checked' : ''}> LLM 走自动路由（标记该 Agent 的模型由路由器分发）</label>
+    <label>备注<br><input id="pxNote" value="${esc(e.note || '')}" style="width:100%"></label>
+  </div>
+  <div style="margin-top:14px;text-align:right">
+    <button class="ghost" onclick="closeModal()">取消</button>
+    <button onclick="proxySave('${esc(id || '')}')">保存</button>
+  </div>`);
+}
+async function proxySave(id){
+  const body = {
+    name: $('#pxName').value.trim(),
+    prefix: $('#pxPrefix').value.trim(),
+    target: $('#pxTarget').value.trim(),
+    llmRouter: $('#pxLlm').checked,
+    note: $('#pxNote').value,
+  };
+  if (!body.name || !body.prefix || !body.target) { toast('名称/前缀/目标必填', true); return; }
+  const r = await api(id ? '/api/proxy/update' : '/api/proxy/add', { method: 'POST', body: { ...body, id } });
+  if (r && r.ok) { toast('已保存'); closeModal(); loadProxy(); }
+  else toast((r && r.error) || '保存失败', true);
+}
+async function proxyScan(){
+  const r = await api('/api/proxy/scan');
+  const ports = (r && r.ports) || [];
+  if (!ports.length) { toast('未扫描到监听端口', true); return; }
+  const used = new Set(proxyData.map(e => (String(e.target).match(/:(\d+)/) || [])[1]));
+  modal(`<h3 style="margin-bottom:10px">本机监听端口（${ports.length} 个）</h3>
+  <div style="max-height:50vh;overflow:auto">
+    ${ports.map(p => `<div style="display:flex;gap:8px;align-items:center;padding:6px 0;border-bottom:1px solid var(--line)">
+      <span class="mono" style="min-width:56px">:${p.port}</span>
+      <span>${esc(p.proc)}</span>
+      <span class="muted">pid ${p.pid}</span>
+      ${used.has(String(p.port)) ? '<span class="badge on">已代理</span>' : `<button class="ghost" style="margin-left:auto" onclick="proxyQuickAdd(${p.port},'${esc(p.proc)}')">添加为代理</button>`}
+    </div>`).join('')}
+  </div>
+  <div style="margin-top:12px;text-align:right"><button class="ghost" onclick="closeModal()">关闭</button></div>`);
+}
+function proxyQuickAdd(port, proc){
+  proxyForm(null, { name: proc, prefix: '/px/svc-' + port, target: 'http://127.0.0.1:' + port });
 }
 
 // ---------- init ----------
