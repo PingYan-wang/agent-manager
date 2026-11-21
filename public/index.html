@@ -295,7 +295,7 @@
   <nav>
     <button data-tab="agents" class="active"><img class="nav-ic" src="/icons/agents.png" alt="">Agent 体检</button>
     <button data-tab="mcp"><img class="nav-ic" src="/icons/mcp.png" alt="">MCP 服务</button>
-    <button data-tab="skills"><img class="nav-ic" src="/icons/skills.png" alt="">已安装 Skills</button>
+    <button data-tab="skills"><img class="nav-ic" src="/icons/skills.png" alt="">Skills</button>
     <button data-tab="orch"><img class="nav-ic" src="/icons/orch.png" alt="">任务编排</button>
     <button data-tab="router"><img class="nav-ic" src="/icons/router.png" alt="">自动路由</button>
     <button data-tab="proxy"><img class="nav-ic" src="/icons/proxy.png" alt="">反代</button>
@@ -857,6 +857,21 @@ async function syncAll(){
 function agentSkillAction(path, agentName, link){ openInstallModal(path, link); }
 
 // ---------- 市场 ----------
+// 一键安装：asm global+all（github 断连走 tarball 直装）→ 服务端自动 syncAllSkills 铺到所有 Agent
+async function quickInstallSkill(source){
+  toast('正在安装 '+source+' …');
+  const r = await api('/api/skills/quick-install',{method:'POST',body:{source}});
+  if(r.code===0){
+    const n = ((r.synced&&r.synced.created)||[]).length;
+    toast(`已安装并同步到所有 Agent${r.via==='github-tarball'?'（tarball 直装）':''}${r.resolvedSource?'（已修正仓库路径）':''}${n?'（新建 '+n+' 个链接）':''}`);
+    localSkillsCache=null; loadSkills(); loadAgents();
+    if($('#skillSearch') && $('#skillSearch').value.trim()) searchSkills();
+    if($('#skillMktEss')) loadSkillMarket();
+  } else {
+    modal(`<h3>安装失败 · ${esc(source)}</h3><pre>${esc((((r.stderr||'')+(r.stdout||'')||r.error||'未知错误')+'\n'+(r.via&&r.via!=='asm'?'['+r.via+']':'')).slice(-3000))}</pre>
+      <div class="actions"><button class="ghost" onclick="closeModal()">关闭</button><button class="btn" onclick="closeModal();openInstallModal('${esc(source)}')">改用手动安装</button></div>`);
+  }
+}
 function renderSkillMktItems(el, items, showReason){
   if(!items || !items.length){ el.innerHTML='<div class="mkt-empty">暂无推荐</div>'; return; }
   el.innerHTML = items.map(s=>`
@@ -945,7 +960,10 @@ function initOrchChat(){
 }
 
 async function loadOrch(){
-  const [cfgR, taskR, poolR] = await Promise.all([api('/api/orchestrator/config'), api('/api/orchestrator/tasks'), api('/api/orchestrator/agent-pool').catch(()=>null)]);
+  const [cfgR, taskR, poolR] = await Promise.all([
+    api('/api/orchestrator/config').catch(()=>({})),
+    api('/api/orchestrator/tasks').catch(()=>({tasks:[]})),
+    api('/api/orchestrator/agent-pool').catch(()=>null)]);
   orchCfg = cfgR.config || {}; orchAgents = cfgR.agents || []; orchPool = poolR?.agents || [];
   if($('#orchDrawer')?.classList.contains('show')) renderOrchConfig();
   const tasks = (taskR.tasks || []).slice().sort((a,b)=>(b.createdAt||0)-(a.createdAt||0));
@@ -1193,7 +1211,7 @@ document.addEventListener('click', e => {
   if(!el) return;
   const act = el.dataset.act || 'market-install';
   const d = el.dataset;
-  if(act==='market-install'){ openInstallModal(d.source); return; }
+  if(act==='market-install'){ quickInstallSkill(d.source); return; }
   if(act==='import-mcp'){ api('/api/agents/import-mcp',{method:'POST',body:{agentId:d.agent,serverName:d.name}}).then(r=>{ toast(r.success===false?'导入失败: '+(r.message||''):'已导入 '+d.name+' → MCPHub', r.success===false); loadServers(); }); return; }
   if(act==='agent-repair'){ agentRepair(d.agent, d.what); return; }
   if(act==='link-skill'){ agentSkillAction(d.path, d.agent, true); return; }
@@ -1455,16 +1473,21 @@ function rcToggleRoute(r){ rcUsageExpanded = (rcUsageExpanded===r?null:r); rende
 function rcUsageView(v){ rcUsageViewMode = v; renderUsageDetail(); }
 
 async function loadRouter(){
+  // 单个接口失败不再拖垮整页：降级为 {error} 由各渲染函数展示
+  const safe = p => p.catch(e=>({error:'请求失败: '+(e&&e.message||e)}));
   const [st, ss, bl, dg, tr, mu] = await Promise.all([
-    api('/api/router/status'), api('/api/router/stats'), api('/api/router/balance'), api('/api/router/digests'), api('/api/router/trend'), api('/api/router/model-usage')
+    safe(api('/api/router/status')), safe(api('/api/router/stats')), safe(api('/api/router/balance')),
+    safe(api('/api/router/digests')), safe(api('/api/router/trend')), safe(api('/api/router/model-usage'))
   ]);
   window.__rcUsage = mu;
-  renderRouterStatus(st);
-  renderRouterStats(ss);
-  renderRouterBalance(bl);
-  renderRouterDigests(dg);
-  renderRouterTrend(tr);
-  renderUsageDetail();
+  // 渲染函数异常时把对应区块标记为失败，而不是一直停在「加载中」
+  const R = (fn, arg, el) => { try{ fn(arg); }catch(e){ const t=$(el); if(t) t.innerHTML=`<div class="empty">渲染失败: ${esc(e.message)}</div>`; } };
+  R(renderRouterStatus, st, '#routerStatus');
+  R(renderRouterStats, ss, '#routerStats');
+  R(renderRouterBalance, bl, '#routerBalance');
+  R(renderRouterDigests, dg, '#routerDigests');
+  R(renderRouterTrend, tr, '#routerTrend');
+  try{ renderUsageDetail(); }catch(e){}
   loadRouterConfigUI();
   loadRouterAgents();
 }
