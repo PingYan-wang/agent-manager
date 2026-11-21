@@ -44,6 +44,8 @@ git clone <repo> agent-manager && cd agent-manager
 
 也支持环境变量覆盖：`PORT` / `MCPHUB_URL` / `MCPHUB_KEY` / `MCPHUB_DATA_DIR` / `ASM_BIN` / `AGENT_MANAGER_URL`。
 
+> **限流**：Agent Manager 高频代理 MCPHub API，默认会触发其 600次/15min 限流。`install.sh` 已在 MCPHub 数据目录写入 `.env` 的 `API_RATE_LIMIT_MAX=0`（dotenv 生效，launchd 和手动启动都覆盖），仅 localhost 部署安全；如需保留限流改回数字即可。
+
 ### 各 Agent 接入网关
 
 在每个 Agent 的 MCP 配置中添加：
@@ -82,7 +84,7 @@ gateway-catalog.md    # 运行时生成（~/.agent-manager/），网关服务清
 | 服务 | 作用 |
 |---|---|
 | `com.agent-manager` | Web UI :3100，KeepAlive 自愈 |
-| `com.mcphub` | MCP 网关 :3000，KeepAlive 自愈 |
+| `com.mcphub` | MCP 网关 :3000，KeepAlive 自愈（默认 `API_RATE_LIMIT_MAX=0` 关闭限流，仅限 localhost） |
 | `com.agent-watchdog` | 每 60s HTTP 探活，挂了 kickstart |
 | `com.wb-mcphub-auth` | 每 15min WorkBuddy 凭据同步（无 WorkBuddy 可不装） |
 | `com.mcp-monitor` | 每 15min MCP 健康检查 + 故障通知 |

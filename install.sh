@@ -57,6 +57,14 @@ fi
 # ---- 运行时目录 ----
 mkdir -p "$HOME_DIR/.agent-manager" "$HUB_DATA"
 
+# ---- MCPHub 默认配置：本机部署关闭 API 限流（dotenv 读取，launchd 外运行也生效）----
+HUB_ENV="$HUB_DATA/.env"
+touch "$HUB_ENV"
+if ! grep -q '^API_RATE_LIMIT_MAX=' "$HUB_ENV"; then
+  echo "API_RATE_LIMIT_MAX=0" >> "$HUB_ENV"
+  echo "==> $HUB_ENV 已写入 API_RATE_LIMIT_MAX=0（本机无限流）"
+fi
+
 # ---- launchd ----
 if [ $NO_LAUNCHD -eq 0 ]; then
   NODE_BIN="$(command -v node)"
