@@ -1016,6 +1016,7 @@ function initOrchChat(){
   dc.requestBodyLimits = {maxMessages: 0};
 }
 
+let orchTasksAll=[];
 async function loadOrch(){
   const [cfgR, taskR, poolR] = await Promise.all([
     api('/api/orchestrator/config').catch(()=>({})),
@@ -1024,11 +1025,13 @@ async function loadOrch(){
   orchCfg = cfgR.config || {}; orchAgents = cfgR.agents || []; orchPool = poolR?.agents || [];
   if($('#orchDrawer')?.classList.contains('show')) renderOrchConfig();
   const tasks = (taskR.tasks || []).slice().sort((a,b)=>(b.createdAt||0)-(a.createdAt||0));
+  orchTasksAll = tasks;
   renderOrchTop(tasks); renderOrchList(tasks); renderOrchComposer();
   initOrchChat();
   if(orchSelId && tasks.some(t=>t.id===orchSelId)) await renderOrchDetail(orchSelId, false);
   else if(tasks.length){ orchSelId = tasks[0].id; await renderOrchDetail(orchSelId, true); }
-  else { orchSelId = null; orchChatTask = null; const dc=$('#orchChatEl'); if(dc&&orchChatReady){ dc.history=[]; dc.refreshMessages(); } renderOrchTree(null); }
+  else { orchSelId = null; orchChatTask = null; const dc=$('#orchChatEl'); if(dc&&orchChatReady){ dc.history=[]; dc.refreshMessages(); } renderOrchTree(null);
+    const sl=$('#orchStatusLine'); if(sl) sl.innerHTML=`引擎 <b>${orchCfg?.enabled?'运行中':'已关闭'}</b> · tick ${orchCfg?.tickSeconds||15}s · 池 ${(orchPool||[]).length} 实例 · 模型 <b>${orchCfg?.planner?.model||'auto'}</b>`; }
   clearTimeout(orchTimer);
   if($('#tab-orch').style.display!=='none') orchTimer = setTimeout(loadOrch, 8000);
 }
@@ -1048,9 +1051,10 @@ function renderOrchList(tasks){
   $('#orchList').innerHTML = tasks.map(t=>{
     const steps = t.plan||[];
     const done = steps.filter(s=>s.status==='done').length;
+    const act=['pending','planning','running','verifying'].includes(t.status);
     return `<button class="orch-item ${t.id===orchSelId?'sel':''}" data-act="orch-sel" data-id="${t.id}">
       <div class="oi-goal">${esc(t.goal)}</div>
-      <div class="oi-meta"><span class="oi-dot" style="background:${orchStColor(t.status)}"></span>${ORCH_ST_TXT[t.status]||t.status}${steps.length?` · ${done}/${steps.length}步`:''}${t.parentId?' · 续':''} · ${orchTime(t.createdAt)}</div>
+      <div class="oi-meta"><span class="oi-dot${act?' running':''}" style="background:${orchStColor(t.status)}"></span>${ORCH_ST_TXT[t.status]||t.status}${steps.length?` · ${done}/${steps.length}步`:''}${t.parentId?' · 续':''} · ${orchTime(t.createdAt)}</div>
     </button>`;
   }).join('');
 }
@@ -1071,9 +1075,12 @@ const ORCH_NODE_TXT={pending:'等待',running:'执行中',retrying:'重试中',d
 function renderOrchTree(t){
   const box=$('#orchTreeView'); if(!box) return;
   const dc=$('#orchChatEl');
-  if(orchView==='tree'){ box.style.display='block'; if(dc) dc.style.display='none'; } else { box.style.display='none'; if(dc) dc.style.display=''; }
-  if(orchView!=='tree') return;
+  const show = orchView==='tree'||orchView==='plan';
+  box.style.display = show?'block':'none';
+  if(dc) dc.style.display = show?'none':'';
   orchTreeTask=t;
+  if(orchView==='plan'){ renderOrchPlan(box,t); return; }
+  if(orchView!=='tree') return;
   const nodes=(t&&Array.isArray(t.tree))?t.tree:[];
   if(!nodes.length){ box.innerHTML='<div class="empty">暂无执行树（任务创建后自动生成）</div>'; return; }
   const byId={}; nodes.forEach(n=>byId[n.id]=n);
@@ -1096,6 +1103,23 @@ function renderOrchTree(t){
   };
   box.innerHTML='<div class="ot-title muted">执行树 · 树干=编排循环（目标/计划/验收/返工/裁决/续步），分叉=子 Agent 执行 · 点击节点看详情</div>'+roots.map(n=>row(n,0)).join('');
 }
+// Claude Code TodoWrite 风格：计划步骤清单视图
+function renderOrchPlan(box,t){
+  const steps=(t&&Array.isArray(t.plan))?t.plan:[];
+  if(!steps.length){ box.innerHTML='<div class="ot-title muted">执行计划</div><div class="empty">暂无计划（规划中…）</div>'; return; }
+  const done=steps.filter(s=>s.status==='done').length;
+  const TXT={done:'完成',running:'执行中',failed:'失败',pending:'等待',paused:'已暂停'};
+  const clsOf=st=>st==='running'?'st-running':st==='done'?'st-done':st==='failed'?'st-failed':st==='paused'?'st-awaiting':'';
+  box.innerHTML='<div class="ot-title muted">执行计划 · '+done+'/'+steps.length+' 完成 · 依赖驱动派发</div>'+steps.map(s=>{
+    const st=s.status||'pending';
+    return `<div class="ot-row ${clsOf(st)}">
+      <span class="ot-icon">${STEP_ICON[st]||'⚪'}</span>
+      <span class="ot-label">${esc(s.id)} · ${esc(s.title||'')}</span>
+      <span class="ot-meta muted" style="font-size:10.5px;flex:none">${esc(s.agent||'')}${s.needsDebate?' · 辩论':''}${(s.deps||[]).length?' · 依赖 '+s.deps.map(esc).join(','):''}</span>
+      <span class="ot-status">${TXT[st]||st}</span>
+    </div>`;
+  }).join('');
+}
 async function orchPoolAdd(){
   const client=$('#orchPoolClient')?.value||'hermes';
   const label=$('#orchPoolLabel')?.value.trim();
@@ -1114,6 +1138,7 @@ function renderOrchTaskBar(t){
       <span class="badge" style="color:${orchStColor(t.status)};border-color:${orchStColor(t.status)}">${ORCH_ST_TXT[t.status]||t.status}</span>
       ${t.summary?`<span class="muted" style="font-size:11px;max-width:40%;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${esc(t.summary.slice(0,80))}</span>`:''}
       <button class="ghost ${orchView==='tree'?'on':''}" data-act="orch-view" data-view="tree">树</button>
+      <button class="ghost ${orchView==='plan'?'on':''}" data-act="orch-view" data-view="plan">计划</button>
       <button class="ghost ${orchView==='chat'?'on':''}" data-act="orch-view" data-view="chat">对话</button>
       <span class="sp"></span>
       <button class="ghost" data-act="orch-pause" data-id="${t.id}" ${t.status==='paused'||!active?'disabled':''}>暂停</button>
@@ -1127,6 +1152,14 @@ function renderOrchTaskBar(t){
       <button class="ghost" data-act="orch-review-retry" data-id="${t.id}">再返工</button>
       <button class="ghost danger" data-act="orch-review-abort" data-id="${t.id}">终止</button>
     </div>`:''}`;
+  updateOrchStatusLine(t, steps);
+}
+// Claude Code 风格状态行：模型 / 工作目录 / 步骤计数 / 已运行时长
+function updateOrchStatusLine(t, steps){
+  const sl=$('#orchStatusLine'); if(!sl) return;
+  const run=(steps||[]).filter(s=>s.status==='running').length, fail=(steps||[]).filter(s=>s.status==='failed').length;
+  const dur=['pending','planning','running','verifying'].includes(t.status)&&t.createdAt?` · 已运行 ${Math.max(1,Math.round((Date.now()-t.createdAt)/1000))}s`:'';
+  sl.innerHTML=`模型 <b>${esc((orchCfg&&orchCfg.planner&&orchCfg.planner.model)||'auto')}</b> · ${esc(t.workdir||'~/')} · 运行 ${run} · 失败 ${fail}${dur} · 更新 ${orchTime(t.updatedAt||t.createdAt)}`;
 }
 
 const STEP_ICON = {done:'✅',running:'🔵',failed:'❌',pending:'⚪',paused:'⏸'};
@@ -1260,8 +1293,64 @@ function renderOrchConfig(){
     <div class="orch-planner">提示：子 Agent 以本机 CLI 无头模式运行（hermes -z / codex exec / devin -p），工作目录默认为任务工作目录。</div>`;
 }
 
+// ---------- ⌘K 命令面板 ----------
+let cmdkOpen=false, cmdkIdx=0, cmdkFiltered=[];
+function goTab(id){ const b=document.querySelector(`nav button[data-tab="${id}"]`); if(b) b.click(); }
+function isTyping(){ const a=document.activeElement; return a&&(a.tagName==='INPUT'||a.tagName==='TEXTAREA'||a.tagName==='SELECT'||a.isContentEditable); }
+function cmdkCommands(){
+  const TABS=[['agents','Agent 体检'],['mcp','MCP 服务'],['skills','已安装 Skills'],['orch','任务编排'],['router','自动路由'],['proxy','反代']];
+  const cmds=TABS.map(([id,name],i)=>({t:`转到「${name}」`,hint:`⌘${i+1}`,icon:'◈',run:()=>goTab(id)}));
+  cmds.push(
+    {t:'新建编排任务',hint:'跳转并聚焦目标输入',icon:'＋',run:()=>{goTab('orch');setTimeout(()=>$('#orchGoal')?.focus(),80);}},
+    {t:'刷新当前页',hint:'重新拉取数据',icon:'↻',run:()=>{const b=document.querySelector('nav button.active');b&&b.click();}},
+    {t:'编排设置',hint:'开关 / 参数 / 子 Agent 池',icon:'⚙',run:()=>{goTab('orch');setTimeout(()=>{if(!$('#orchDrawer')?.classList.contains('show'))toggleOrchSettings();},80);}},
+    {t:'切换执行树视图',hint:'编排页 · 树/计划/对话',icon:'🌳',run:()=>{goTab('orch');orchView=orchView==='tree'?'chat':'tree';const id=orchChatTask||orchSelId;if(id)renderOrchDetail(id,false);}},
+  );
+  const cur=(orchTasksAll||[]).find(x=>x.id===orchSelId);
+  if(cur){
+    cmds.push({t:'当前任务: 暂停',hint:cur.id.slice(0,14),icon:'⏸',run:()=>orchAction(cur.id,'pause')});
+    if(['paused','blocked','failed'].includes(cur.status)) cmds.push({t:'当前任务: 继续',hint:cur.id.slice(0,14),icon:'▶',run:()=>orchAction(cur.id,'resume')});
+    if(!['done','failed'].includes(cur.status)) cmds.push({t:'当前任务: 停止',hint:cur.id.slice(0,14),icon:'■',run:()=>orchAction(cur.id,'stop')});
+  }
+  return cmds;
+}
+function cmdkToggle(){ cmdkOpen?cmdkClose():cmdkOpenPalette(); }
+function cmdkOpenPalette(){
+  cmdkOpen=true; cmdkIdx=0;
+  $('#cmdkMask').classList.add('show'); $('#cmdk').classList.add('show');
+  const inp=$('#cmdkInput'); inp.value=''; cmdkRender('');
+  setTimeout(()=>inp.focus(),30);
+}
+function cmdkClose(){ cmdkOpen=false; $('#cmdkMask').classList.remove('show'); $('#cmdk').classList.remove('show'); }
+function cmdkRender(q){
+  q=(q||'').trim().toLowerCase();
+  cmdkFiltered=cmdkCommands().filter(c=>!q||(c.t+' '+(c.hint||'')).toLowerCase().includes(q));
+  if(cmdkIdx>=cmdkFiltered.length) cmdkIdx=0;
+  $('#cmdkList').innerHTML=cmdkFiltered.length
+    ? cmdkFiltered.map((c,i)=>`<div class="cmdk-item ${i===cmdkIdx?'sel':''}" data-i="${i}"><span class="ci-ic">${c.icon||'›'}</span><span class="ci-t">${esc(c.t)}</span><span class="ci-h">${esc(c.hint||'')}</span></div>`).join('')
+    : '<div class="cmdk-empty">没有匹配的命令</div>';
+  const sel=$('#cmdkList .cmdk-item.sel'); if(sel) sel.scrollIntoView({block:'nearest'});
+}
+function cmdkRun(i){ const c=cmdkFiltered[i]; cmdkClose(); if(c) c.run(); }
+$('#cmdkInput').addEventListener('input',e=>{cmdkIdx=0;cmdkRender(e.target.value);});
+$('#cmdkInput').addEventListener('keydown',e=>{
+  if(e.key==='ArrowDown'){e.preventDefault();cmdkIdx=Math.min(cmdkIdx+1,cmdkFiltered.length-1);cmdkRender($('#cmdkInput').value);}
+  else if(e.key==='ArrowUp'){e.preventDefault();cmdkIdx=Math.max(cmdkIdx-1,0);cmdkRender($('#cmdkInput').value);}
+  else if(e.key==='Enter'){e.preventDefault();cmdkRun(cmdkIdx);}
+});
+document.addEventListener('keydown',e=>{
+  if((e.metaKey||e.ctrlKey)&&e.key.toLowerCase()==='k'){e.preventDefault();cmdkToggle();return;}
+  if(e.key==='Escape'&&cmdkOpen){cmdkClose();return;}
+  if((e.metaKey||e.ctrlKey)&&/^[1-6]$/.test(e.key)&&!isTyping()){
+    e.preventDefault();
+    goTab(['agents','mcp','skills','orch','router','proxy'][+e.key-1]);
+  }
+});
+
 // ---------- 事件委托 ----------
 document.addEventListener('click', e => {
+  const ci = e.target.closest('.cmdk-item');
+  if(ci){ cmdkRun(+ci.dataset.i); return; }
   const foldEl = e.target.closest('.fold-head');
   if(foldEl){ foldEl.parentElement.classList.toggle('open'); return; }
   const el = e.target.closest('[data-act],.install-btn');
