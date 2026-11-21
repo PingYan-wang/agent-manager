@@ -10,14 +10,21 @@ export function redactSecrets(value) {
   ]));
 }
 
+function isLoopbackHostHeader(host) {
+  const h = String(host || '').trim().toLowerCase();
+  return h === 'localhost' || h.startsWith('localhost:')
+    || h === '127.0.0.1' || h.startsWith('127.0.0.1:')
+    || h === '[::1]' || h.startsWith('[::1]:');
+}
+
 export function requestAllowed(req, port, writeToken) {
-  const hosts = new Set([`localhost:${port}`, `127.0.0.1:${port}`, `[::1]:${port}`]);
-  if (!hosts.has(req.headers.host)) return { status: 403, error: 'Invalid local Host' };
+  // 允许任意本机回环端口（含端口转发/预览代理），仍拒绝非回环 Host 与跨站 Origin
+  if (!isLoopbackHostHeader(req.headers.host)) return { status: 403, error: 'Invalid local Host' };
   const origin = req.headers.origin;
   if (origin) {
     let url;
     try { url = new URL(origin); } catch { return { status: 403, error: 'Invalid Origin' }; }
-    if (url.protocol !== 'http:' || !hosts.has(url.host)) return { status: 403, error: 'Cross-origin access denied' };
+    if (url.protocol !== 'http:' || !['localhost', '127.0.0.1', '[::1]'].includes(url.hostname)) return { status: 403, error: 'Cross-origin access denied' };
   }
   if (req.headers['sec-fetch-site'] === 'cross-site') return { status: 403, error: 'Cross-site access denied' };
   if (writeToken) {
