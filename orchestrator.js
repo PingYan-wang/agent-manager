@@ -60,7 +60,7 @@ const AGENT_WORKERS = {
 };
 
 // ---------- state ----------
-let state = { config: structuredClone(DEFAULT_CONFIG), tasks: [] };
+let state = { config: structuredClone(DEFAULT_CONFIG), tasks: [], agents: [] }; // agents: 子 Agent 池实例
 let dirty = false;
 const pendingDispatch = new Map(); // taskId -> Map(stepKey -> Promise)
 const running = new Map(); // stepKey -> {child, taskId, stepId, agent, startedAt}
@@ -71,6 +71,7 @@ async function load() {
   state.config = { ...structuredClone(DEFAULT_CONFIG), ...(state.config || {}) };
   state.config.planner = { ...DEFAULT_CONFIG.planner, ...(state.config.planner || {}) };
   state.tasks = state.tasks || [];
+  state.agents = state.agents || [];
 }
 async function save() {
   if (!dirty) return;
@@ -90,6 +91,116 @@ function log(task, level, msg) {
 }
 const findTask = (id) => state.tasks.find((t) => t.id === id);
 
+// ---------- 子 Agent 池 + 执行树 + 失败自愈 ----------
+function classifyFail(text) {
+  const s = String(text || '');
+  if (/quota|insufficient|余额不足|额度不足|credit|billing|429|rate.?limit/i.test(s)) return 'quota';
+  if (/ECONN|ETIMEDOUT|ENOTFOUND|EAI_AGAIN|socket|network|fetch failed|连接|超时|timeout/i.test(s)) return 'network';
+  return 'llm';
+}
+
+function createPoolAgent(client) {
+  const w = AGENT_WORKERS[client];
+  if (!w) return null;
+  const n = (state.agents || []).filter((a) => a.client === client).length + 1;
+  const ag = { id: `a_${client}_${n}_${Date.now().toString(36)}`, client, label: `${w.label} #${n}`, status: 'idle', createdAt: Date.now(), lastUsed: 0 };
+  state.agents.push(ag); dirty = true; return ag;
+}
+
+// 选一个可用池实例：优先空闲；并行额度内自动扩容；否则复用最久未用
+function pickPoolAgent(client) {
+  const now = Date.now();
+  const mine = (state.agents || []).filter((a) => a.client === client && !(a.cooldownUntil > now));
+  const idle = mine.filter((a) => a.status !== 'busy').sort((a, b) => (a.lastUsed || 0) - (b.lastUsed || 0));
+  if (idle.length) return idle[0];
+  const maxPar = Math.max(1, state.config.maxConcurrent || 2);
+  if (mine.length < maxPar || !mine.length) return createPoolAgent(client);
+  return mine.sort((a, b) => (a.lastUsed || 0) - (b.lastUsed || 0))[0];
+}
+
+// 失败自愈候选：首选 client +（跨 Client 开启时）一个备选 client
+function recoveryCandidates(client) {
+  const out = [client];
+  if (state.config.crossClient) {
+    for (const c of allowedAgents()) if (c !== client) { out.push(c); break; }
+  }
+  return out;
+}
+
+// 执行树节点
+function ensureTree(task) { if (!Array.isArray(task.tree)) task.tree = []; }
+function nodeFind(task, id) { return (task.tree || []).find((n) => n.id === id) || null; }
+function nodePatch(task, id, patch) {
+  const n = nodeFind(task, id); if (!n) return null;
+  Object.assign(n, patch);
+  if (patch.status === 'done' || patch.status === 'failed') n.endTs = Date.now();
+  dirty = true; return n;
+}
+function trunkNode(task, kind, label, extra) {
+  ensureTree(task);
+  const n = { id: `n${task.tree.length + 1}`, kind, label: String(label || '').slice(0, 120), status: 'running', ts: Date.now(), ...(extra || {}) };
+  task.tree.push(n); dirty = true; return n;
+}
+function goalNode(task, patch) {
+  ensureTree(task);
+  let n = task.tree.find((x) => x.kind === 'goal');
+  if (!n) { n = { id: 'n1', kind: 'goal', label: String(task.goal || '').slice(0, 80), status: 'pending', ts: task.createdAt || Date.now() }; task.tree.unshift(n); }
+  return nodePatch(task, n.id, patch);
+}
+function planNodeFor(task, create) {
+  ensureTree(task);
+  let n = task.tree.find((x) => x.kind === 'plan');
+  if (!n && create) n = trunkNode(task, 'plan', '执行计划', {});
+  return n || null;
+}
+function ensureStepNode(task, step) {
+  ensureTree(task);
+  const id = `step_${step.id}`;
+  let n = nodeFind(task, id);
+  if (!n) {
+    const plan = planNodeFor(task);
+    n = { id, kind: 'step', parentId: plan ? plan.id : null, label: `${step.id} ${step.title || ''}`.trim(), agent: step.agent, status: 'pending', ts: Date.now() };
+    task.tree.push(n); dirty = true;
+  }
+  return n;
+}
+function stepNode(task, step, patch) {
+  const n = ensureStepNode(task, step);
+  nodePatch(task, n.id, patch);
+  return n;
+}
+
+// 带失败自愈的派发：重试 → 冷却 → 切换备选 client
+async function dispatchWithRecovery(task, step, persona, nodeId) {
+  const primary = step.agent;
+  const candidates = recoveryCandidates(primary);
+  const maxAttempts = candidates.length > 1 ? 3 : 2;
+  let last = { ok: false, error: 'no attempt', code: -1, output: '' };
+  let attempt = 0;
+  for (const client of candidates) {
+    const reps = client === primary ? 2 : 1;
+    for (let rep = 0; rep < reps && attempt < maxAttempts; rep++, attempt++) {
+      const ag = pickPoolAgent(client);
+      if (!ag) continue;
+      ag.status = 'busy'; ag.lastUsed = Date.now(); ag.taskId = task.id; ag.stepId = step.id; dirty = true;
+      const isRetry = attempt > 0;
+      nodePatch(task, nodeId, { status: isRetry ? 'retrying' : 'running', agent: client, agentId: ag.id, detail: isRetry ? `第 ${attempt + 1} 次尝试` : undefined, attempt: attempt + 1 });
+      if (isRetry) log(task, 'warn', `步骤 ${step.id} 第 ${attempt + 1} 次尝试 → ${ag.label}(${client})`);
+      const r = await dispatchStep(task, step, persona, ag);
+      if (r.ok) { ag.status = 'idle'; ag.taskId = undefined; ag.stepId = undefined; dirty = true; return r; }
+      last = r;
+      const cls = classifyFail(r.error || r.output || '');
+      const cooldown = cls === 'quota' ? 30 * 60000 : 5 * 60000;
+      ag.status = 'cooldown'; ag.cooldownUntil = Date.now() + cooldown; ag.lastError = String(r.error || r.output || '').slice(0, 200);
+      ag.taskId = undefined; ag.stepId = undefined; dirty = true;
+      log(task, 'warn', `步骤 ${step.id} 尝试${attempt + 1}失败(${cls}) ${ag.label}: ${String(r.error || '').slice(0, 120)}`);
+      if (cls === 'quota') break; // 额度类不在同 client 重试，直接换备选
+    }
+  }
+  nodePatch(task, nodeId, { status: 'failed', detail: String(last.error || `exit ${last.code}`).slice(0, 200) });
+  return last;
+}
+
 // ---------- planner ----------
 async function plannerChat(task, userPrompt) {
   const p = state.config.planner;
@@ -107,6 +218,7 @@ async function plannerChat(task, userPrompt) {
 - repair: {"action":"repair","steps":[...同 decompose 结构...]}
 - 辩论: 当步骤需要正反方论证时设 needsDebate=true，引擎会派两个 Agent 各执一词再综合。
 - 跨 Client 开关当前: ${state.config.crossClient ? '开(可用全部 agent)' : '关(只能用 hermes)'}
+- 步骤的 agent 字段填客户端类型(hermes/codex/devin)即可；系统会从子 Agent 池自动选择空闲实例并行执行，一个 client 可有多个实例。
 - 子 Agent 提示词要自包含：包含背景、输入、期望输出、验收标准。`;
   const body = {
     model: p.model,
@@ -150,12 +262,14 @@ function buildPrompt(step, task) {
   return `${step.prompt}\n\n---\n背景: 这是整体任务「${task.goal}」的子任务(${step.id}: ${step.title})。工作目录: ${task.workdir}。请完成后输出清晰的结果摘要。`;
 }
 
-function dispatchStep(task, step, persona) {
-  const w = AGENT_WORKERS[step.agent];
-  if (!w) return Promise.resolve({ ok: false, error: `未知 agent ${step.agent}` });
+function dispatchStep(task, step, persona, agent) {
+  const client = agent?.client || step.agent;
+  const w = AGENT_WORKERS[client];
+  if (!w) return Promise.resolve({ ok: false, error: `未知 agent ${client}` });
   const prompt = persona ? `${persona}\n\n${buildPrompt(step, task)}` : buildPrompt(step, task);
   const args = w.args.map((a) => (a === '{prompt}' ? prompt : a));
   const key = `${task.id}:${step.id}${persona ? ':' + persona.slice(0, 8) : ''}`;
+  const agentId = agent?.id || null;
   return new Promise((resolve) => {
     let child;
     try {
@@ -172,8 +286,8 @@ function dispatchStep(task, step, persona) {
       const text = (out || '') + (err ? `\n[stderr]\n${err.slice(-3000)}` : '');
       resolve({ ok: code === 0, code, output: text.slice(-12000) });
     });
-    running.set(key, { child, taskId: task.id, stepId: step.id, agent: step.agent, startedAt: Date.now() });
-    log(task, 'info', `dispatch ${step.id} → ${step.agent}${persona ? ' (' + persona + ')' : ''}`);
+    running.set(key, { child, taskId: task.id, stepId: step.id, agent: client, agentId, startedAt: Date.now() });
+    log(task, 'info', `dispatch ${step.id} → ${agent?.label || client}${persona ? ' (' + persona + ')' : ''}`);
     dirty = true;
   });
 }
@@ -183,7 +297,7 @@ async function tick() {
   if (!state.config.enabled) return;
   const active = state.tasks.filter((t) => ['pending', 'planning', 'running', 'verifying'].includes(t.status));
   for (const task of active) {
-    try { await stepTask(task); } catch (e) { log(task, 'error', 'tick error: ' + e.message); task.status = 'blocked'; }
+    try { await stepTask(task); } catch (e) { log(task, 'error', 'tick error: ' + e.message); task.status = 'blocked'; goalNode(task, { status: 'blocked', detail: String(e.message).slice(0, 200) }); }
     await save();
   }
 }
@@ -192,6 +306,7 @@ async function stepTask(task) {
   // 1) 还没有计划 → 让 planner 拆解
   if (!task.plan || !task.plan.length) {
     task.status = 'planning';
+    goalNode(task, { status: 'running', detail: '规划中' });
     log(task, 'info', '请求 planner 拆解任务');
     const d = await plannerChat(task, '请将该目标拆解为子任务 steps(decompose)。若目标简单可只拆 1-2 步。');
     if (d.action === 'decompose' && Array.isArray(d.steps) && d.steps.length) {
@@ -201,10 +316,13 @@ async function stepTask(task) {
         status: 'pending',
       }));
       task.status = 'running';
+      const pn = planNodeFor(task, true);
+      if (pn) nodePatch(task, pn.id, { detail: `${task.plan.length} 个子任务` });
       log(task, 'info', `计划就绪: ${task.plan.map((s) => `${s.id}(${s.agent})`).join(', ')}`);
     } else {
       log(task, 'warn', 'planner 未返回 decompose: ' + JSON.stringify(d).slice(0, 300));
       task.status = 'blocked';
+      goalNode(task, { status: 'blocked', detail: 'planner 未返回计划' });
     }
     return;
   }
@@ -218,6 +336,8 @@ async function stepTask(task) {
   const allDone = steps.every((s) => ['done', 'failed'].includes(s.status)) && pend.size === 0;
   if (allDone) {
     task.status = 'verifying';
+    const pn0 = planNodeFor(task);
+    if (pn0 && !['done', 'failed'].includes(pn0.status)) nodePatch(task, pn0.id, { status: steps.some((s) => s.status === 'failed') ? 'failed' : 'done', detail: `${steps.length} 步全部结束` });
     const failed = steps.filter((s) => s.status === 'failed');
     if (failed.length && (task.repairs || 0) < state.config.maxRepairs) {
       task.repairs = (task.repairs || 0) + 1;
@@ -229,20 +349,26 @@ async function stepTask(task) {
           if (ex) Object.assign(ex, { status: 'pending', prompt: ns.prompt || ex.prompt, agent: ns.agent || ex.agent, result: undefined });
           else steps.push({ id: ns.id || `s${steps.length + 1}`, title: ns.title || '', agent: ns.agent || 'hermes', prompt: ns.prompt || '', deps: ns.deps || [], needsDebate: !!ns.needsDebate, status: 'pending' });
         }
+        trunkNode(task, 'repair', `返工第 ${task.repairs} 轮`, { detail: `${d.steps.length} 个补救步骤` });
         task.status = 'running';
         return;
       }
       task.status = 'awaiting_review';
       task.reviewDeadline = Date.now() + REVIEW_TIMEOUT_MS;
+      task.reviewNodeId = trunkNode(task, 'review', '人工裁决', { status: 'awaiting', detail: '返工规划失败' }).id;
       log(task, 'warn', '返工规划失败，转人工裁决（24h 超时自动终止）');
       return;
     }
     // planner 验收
+    const verifyNode = trunkNode(task, 'verify', '验收', {});
     const v = await plannerChat(task, '所有子任务已完成。请验收整体目标是否达成: verify(pass=true/false, feedback)。若未完全达成请说明差距。若已完全达成也可直接返回 done+summary。');
+    const verifyPass = (v.action === 'verify' && v.pass) || v.action === 'done';
+    nodePatch(task, verifyNode.id, { status: verifyPass ? 'done' : 'failed', detail: (v.feedback || v.summary || '').slice(0, 300) });
     // planner 可能返回 verify(pass=true) 或直接 done+summary，两者都视为验收通过
     if ((v.action === 'verify' && v.pass) || v.action === 'done') {
       task.status = 'done';
       task.summary = v.feedback || v.summary || '';
+      goalNode(task, { status: 'done', detail: (task.summary || '').slice(0, 200) });
       log(task, 'info', '验收通过: ' + (v.feedback || '').slice(0, 200));
       await maybeContinue(task);
     } else if (v.action === 'verify' && !v.pass && (task.repairs || 0) < state.config.maxRepairs) {
@@ -251,11 +377,13 @@ async function stepTask(task) {
       const d = await plannerChat(task, `验收反馈: ${v.feedback || '未达标'}。请 repair 给出补齐步骤。`);
       if (d.action === 'repair' && Array.isArray(d.steps)) {
         for (const ns of d.steps) steps.push({ id: ns.id || `s${steps.length + 1}`, title: ns.title || '', agent: ns.agent || 'hermes', prompt: ns.prompt || '', deps: ns.deps || [], needsDebate: !!ns.needsDebate, status: 'pending' });
+        trunkNode(task, 'repair', `返工第 ${task.repairs} 轮`, { detail: `${d.steps.length} 个补救步骤` });
         task.status = 'running';
-      } else { task.status = 'awaiting_review'; task.reviewDeadline = Date.now() + REVIEW_TIMEOUT_MS; log(task, 'warn', '验收未通过，转人工裁决'); }
+      } else { task.status = 'awaiting_review'; task.reviewDeadline = Date.now() + REVIEW_TIMEOUT_MS; task.reviewNodeId = trunkNode(task, 'review', '人工裁决', { status: 'awaiting', detail: '验收未通过' }).id; log(task, 'warn', '验收未通过，转人工裁决'); }
     } else {
       task.status = 'awaiting_review';
       task.reviewDeadline = Date.now() + REVIEW_TIMEOUT_MS;
+      task.reviewNodeId = trunkNode(task, 'review', '人工裁决', { status: 'awaiting', detail: (v.feedback || '验收未通过').slice(0, 200) }).id;
       log(task, 'warn', '验收未通过且无法自动返工，转人工裁决: ' + (v.feedback || JSON.stringify(v)).slice(0, 200));
     }
     return;
@@ -270,40 +398,53 @@ async function stepTask(task) {
   const ready = steps.filter((s) => s.status === 'pending' && (s.deps || []).every((d) => steps.find((x) => x.id === d)?.status === 'done'));
   for (const step of ready.slice(0, capacity)) {
     const allowed = allowedAgents();
-    if (!allowed.includes(step.agent)) {
+    const effAgent = task.client && allowed.includes(task.client) ? task.client : step.agent;
+    if (!allowed.includes(effAgent)) {
       step.status = 'failed';
-      step.result = `agent ${step.agent} 当前不可用(crossClient=${state.config.crossClient})`;
+      step.result = `agent ${effAgent} 当前不可用(crossClient=${state.config.crossClient})`;
+      stepNode(task, step, { status: 'failed', agent: effAgent, detail: step.result });
       continue;
     }
-    const w = AGENT_WORKERS[step.agent];
+    const w = AGENT_WORKERS[effAgent];
     if (w?.authCheck && !(await w.authCheck())) {
       step.status = 'failed';
       step.result = `${w.label} 未登录/不可用: ${w.note || ''}`;
-      log(task, 'warn', `步骤 ${step.id} 的 agent ${step.agent} 不可用`);
+      log(task, 'warn', `步骤 ${step.id} 的 agent ${effAgent} 不可用`);
+      stepNode(task, step, { status: 'failed', agent: effAgent, detail: step.result });
       continue;
     }
+    step.agent = effAgent;
     step.status = 'running';
+    const nodeId = ensureStepNode(task, step).id;
+    stepNode(task, step, { status: 'running', agent: effAgent });
     const p = (async () => {
       try {
         if (step.needsDebate) {
-          // 辩论: 两个 agent 正反方 → planner 综合
-          const others = allowed.filter((a) => a !== step.agent);
-          const agents = [step.agent, others[0] || step.agent];
+          // 辩论: 两个 agent 正反方 → planner 综合（各自从池中取实例，天然不同 client 优先）
+          const others = allowed.filter((a) => a !== effAgent);
+          const clients = [effAgent, others[0] || effAgent];
+          const debateRun = async (client, persona) => {
+            const r = await dispatchWithRecovery(task, step, persona, nodeId);
+            return { client, ok: r.ok, text: r.ok ? r.output : `FAILED(code=${r.code}): ${(r.output || r.error || '').slice(0, 2000)}` };
+          };
           const [r1, r2] = await Promise.all([
-            dispatchStep(task, step, '你是正方，请给出支持该子任务目标的充分论证和方案。'),
-            dispatchStep(task, { ...step, agent: agents[1] }, '你是反方，请指出风险、反对意见和替代方案。'),
+            debateRun(clients[0], '你是正方，请给出支持该子任务目标的充分论证和方案。'),
+            debateRun(clients[1], '你是反方，请指出风险、反对意见和替代方案。'),
           ]);
-          const debateNote = `正方(${agents[0]}):\n${(r1.output || r1.error || '').slice(0, 4000)}\n\n反方(${agents[1]}):\n${(r2.output || r2.error || '').slice(0, 4000)}`;
+          const debateNote = `正方(${r1.client}):\n${r1.text.slice(0, 4000)}\n\n反方(${r2.client}):\n${r2.text.slice(0, 4000)}`;
           const syn = await plannerChat(task, `步骤 ${step.id} 进行了正反辩论:\n${debateNote}\n\n请综合双方给出最终执行结论(JSON 即可, 作为步骤结果)。`);
           step.result = syn && syn.summary ? syn.summary : debateNote.slice(0, 6000);
           step.status = 'done';
+          stepNode(task, step, { status: 'done', detail: '辩论完成' });
         } else {
-          const r = await dispatchStep(task, step);
+          const r = await dispatchWithRecovery(task, step, undefined, nodeId);
           step.result = r.ok ? r.output : `FAILED(code=${r.code}): ${(r.output || r.error || '').slice(0, 4000)}`;
           step.status = r.ok ? 'done' : 'failed';
+          stepNode(task, step, { status: step.status, detail: step.status === 'done' ? undefined : String(r.error || `exit ${r.code}`).slice(0, 200) });
         }
       } catch (e) {
         step.status = 'failed'; step.result = 'dispatch exception: ' + e.message;
+        stepNode(task, step, { status: 'failed', detail: String(e.message).slice(0, 200) });
       } finally {
         pend.delete(`${task.id}:${step.id}`); if (pend.size === 0) pendingDispatch.delete(task.id);
         dirty = true;
@@ -322,9 +463,10 @@ async function maybeContinue(task) {
     if (d.action === 'next_goal' && d.goal) {
       const nt = {
         id: `t_${Date.now().toString(36)}`, goal: d.goal, parentId: task.id, continuation: cont,
-        workdir: task.workdir, status: 'pending', plan: [], log: [], createdAt: Date.now(), updatedAt: Date.now(),
+        workdir: task.workdir, client: task.client, status: 'pending', plan: [], log: [], tree: [{ id: 'n1', kind: 'goal', label: String(d.goal).slice(0, 80), status: 'pending', ts: Date.now() }], createdAt: Date.now(), updatedAt: Date.now(),
       };
       state.tasks.push(nt);
+      trunkNode(task, 'continue', `自动续步 #${cont}`, { status: 'done', detail: String(d.goal).slice(0, 200) });
       log(task, 'info', `自动续步 #${cont}: ${d.goal.slice(0, 120)}`);
       log(nt, 'info', `由 ${task.id} 自动续步生成`);
     }
@@ -340,6 +482,10 @@ export async function initOrchestrator() {
     if (s.status === 'running') { s.status = 'pending'; s.result = undefined; recovered++; }
   }
   if (recovered) { await save(); console.log(`[orch] recovered ${recovered} stale running steps`); }
+  // 子 Agent 池恢复：进程重启后在途派发已丢失，busy 实例重置为 idle
+  let freed = 0;
+  for (const a of state.agents || []) if (a.status === 'busy') { a.status = 'idle'; freed++; }
+  if (freed) { dirty = true; await save(); console.log(`[orch] freed ${freed} busy agents`); }
   setInterval(() => { tick().catch((e) => console.log('[orch] tick:', e.message)); }, (state.config.tickSeconds || 15) * 1000).unref();
   console.log(`[orch] loaded ${state.tasks.length} tasks, enabled=${state.config.enabled}`);
 }
@@ -360,20 +506,35 @@ export async function handleOrchestratorApi(url, method, body) {
   if (p === '/api/orchestrator/tasks' && method === 'GET') {
     const nowTs = Date.now();
     for (const t of state.tasks) {
-      if (t.status === 'awaiting_review' && t.reviewDeadline && nowTs > t.reviewDeadline) { t.status = 'failed'; log(t, 'error', '人工裁决超时(24h)，自动终止'); dirty = true; }
+      if (t.status === 'awaiting_review' && t.reviewDeadline && nowTs > t.reviewDeadline) { t.status = 'failed'; log(t, 'error', '人工裁决超时(24h)，自动终止'); if (t.reviewNodeId) nodePatch(t, t.reviewNodeId, { status: 'failed', detail: '裁决超时' }); goalNode(t, { status: 'failed', detail: '人工裁决超时' }); dirty = true; }
     }
     if (dirty) await save();
     return { tasks: state.tasks.map((t) => ({ ...t, plan: (t.plan || []).map((s) => ({ ...s, result: s.result ? String(s.result).slice(0, 300) : s.result })) })) };
   }
   if (p === '/api/orchestrator/tasks' && method === 'POST') {
-    const { goal, workdir } = body || {};
+    const { goal, workdir, client } = body || {};
     if (!goal) return { error: '缺少 goal' };
     const id = `t_${Date.now().toString(36)}`;
     const wd = workdir || path.join(WORK_ROOT, id);
     await mkdir(wd, { recursive: true });
-    const t = { id, goal, workdir: wd, status: 'pending', plan: [], log: [], createdAt: Date.now(), updatedAt: Date.now() };
+    const t = { id, goal, workdir: wd, client: client || undefined, status: 'pending', plan: [], log: [], tree: [{ id: 'n1', kind: 'goal', label: String(goal).slice(0, 80), status: 'pending', ts: Date.now() }], createdAt: Date.now(), updatedAt: Date.now() };
     state.tasks.push(t); dirty = true; await save();
     return { ok: true, task: t };
+  }
+  if (p === '/api/orchestrator/agent-pool' && method === 'GET') {
+    return { agents: (state.agents || []).map((a) => ({ ...a, worker: AGENT_WORKERS[a.client]?.label || a.client, available: !!AGENT_WORKERS[a.client] })), workers: await availableAgents() };
+  }
+  if (p === '/api/orchestrator/agent-pool' && method === 'POST') {
+    const { client, label } = body || {};
+    if (!AGENT_WORKERS[client]) return { error: `未知 client: ${client}` };
+    const ag = { id: `a_${client}_${Date.now().toString(36)}${Math.floor(Math.random() * 46656).toString(36)}`, client, label: String(label || AGENT_WORKERS[client].label).slice(0, 40), status: 'idle', createdAt: Date.now(), lastUsed: 0 };
+    state.agents = state.agents || []; state.agents.push(ag); dirty = true; await save();
+    return { ok: true, agent: ag };
+  }
+  const am = p.match(/^\/api\/orchestrator\/agent-pool\/([\w-]+)$/);
+  if (am && method === 'DELETE') {
+    state.agents = (state.agents || []).filter((a) => a.id !== am[1]); dirty = true; await save();
+    return { ok: true };
   }
   const m = p.match(/^\/api\/orchestrator\/tasks\/([\w-]+)(\/(\w+))?$/);
   if (m) {
@@ -386,10 +547,11 @@ export async function handleOrchestratorApi(url, method, body) {
     if (method === 'POST' && action === 'stop') { t.status = 'failed'; log(t, 'warn', '手动停止'); dirty = true; }
     if (method === 'POST' && action === 'review') {
       const act = (body || {}).action;
-      if (act === 'pass') { t.status = 'done'; t.summary = (t.summary || '') + '（人工裁决通过）'; log(t, 'info', '人工裁决: 通过'); }
+      if (act === 'pass') { t.status = 'done'; t.summary = (t.summary || '') + '（人工裁决通过）'; log(t, 'info', '人工裁决: 通过'); goalNode(t, { status: 'done', detail: '人工裁决通过' }); }
       else if (act === 'retry') { t.status = 'pending'; t.repairs = 0; t.error = undefined; log(t, 'info', '人工裁决: 再返工'); }
-      else if (act === 'abort') { t.status = 'failed'; log(t, 'warn', '人工裁决: 终止'); }
+      else if (act === 'abort') { t.status = 'failed'; log(t, 'warn', '人工裁决: 终止'); goalNode(t, { status: 'failed', detail: '人工裁决终止' }); }
       else return { error: 'action 需为 pass/retry/abort' };
+      if (t.reviewNodeId) nodePatch(t, t.reviewNodeId, { status: 'done', detail: `人工裁决: ${act}` });
       dirty = true;
     }
     if (method === 'DELETE' && !action) { state.tasks = state.tasks.filter((x) => x.id !== t.id); dirty = true; }
