@@ -205,9 +205,9 @@ Runs a local fake upstream covering: provider-level skip of a whole account, mod
 
 `devin-proxy/proxy.mjs` wraps a one-shot `devin -p --model ...` agent session as a limited OpenAI-compatible endpoint. Start it with `DEVIN_PROXY_KEY=<random-key> node devin-proxy/proxy.mjs`; it binds to `127.0.0.1:8790` only. The local Base URL is `http://127.0.0.1:8790/v1`; Agent Manager can forward it at `/px/devin/v1`.
 
-The bridge requires Bearer authentication. `GET /health` checks only the listener, **not** CLI authentication or model availability: run `devin auth status` and `devin models` before configuring a model mapping or moving this upstream ahead of another provider. `SWE-2-High` must be verified in the account's actual model list; it is not implied by an arbitrary alias.
+The bridge requires Bearer authentication. `GET /health` checks only the listener, **not** CLI authentication or model availability: check `devin models` and make a real completion before prioritizing a model. This machine has verified `swe-2-high` end to end. Map it with `DEVIN_MODEL_MAP='{"swe-2-high":"swe-2-high"}'`; the model-list endpoint only reports configured aliases, not live availability.
 
-This is **not direct model inference**. Each call launches an independent Devin agent session and consumes ACUs. It accepts only non-streaming text, not OpenAI tool calls or images. Agent requests requiring tools or streaming must use another provider. Test locally without billing via `node --test devin-proxy/proxy.test.mjs`.
+On this machine, simple and coding routes try Devin before Volcano Ark; complex and expert retain Reverix first, then try Devin before Ark. WorkBuddy and the official DeepSeek API remain downstream fallbacks. This is **not direct model inference**. Each call launches an independent Devin agent session and may consume account quota. It accepts only non-streaming text, not OpenAI tool calls or images. Agent requests requiring tools or streaming must use another provider. Test locally without billing via `node --test devin-proxy/proxy.test.mjs`.
 
 ## Open-source comparison
 

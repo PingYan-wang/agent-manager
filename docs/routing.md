@@ -207,15 +207,15 @@ npm run test:router
 
 ## 可选上游：Devin CLI 反代（devin-proxy）
 
-`devin-proxy/proxy.mjs` 把 Devin 桌面端内嵌 CLI 的无头模式（`devin -p --model ...`）包装成 OpenAI 兼容接口，把 Devin 账户可用的 Opus / GPT / Gemini 等前沿模型接入路由，作为 Reverix 的兜底厂商。
+`devin-proxy/proxy.mjs` 把 Devin 桌面端内嵌 CLI 的无头模式（`devin -p --model ...`）包装成 OpenAI 兼容接口，把账号可用的模型接入路由。本机已通过一次真实调用验证 `swe-2-high`。
 
 - 启动：`DEVIN_PROXY_KEY=<随机key> node devin-proxy/proxy.mjs`（仅绑 127.0.0.1:8790，Bearer 鉴权；launchd 托管见下）
-- 模型映射：`DEVIN_MODEL_MAP='{"devin-opus":"<devin models 里的 ID>","devin-gpt":"...","devin-gemini":"..."}'`，具体 ID 以 `devin models` 输出为准；缺省原样透传
+- 模型映射：`DEVIN_MODEL_MAP='{"swe-2-high":"swe-2-high"}'`，具体 ID 以本机 `devin models` 输出为准；缺省原样透传
 - 能力声明：`tools:false, stream:false`——CLI 是完整 agent 会话，不接受 OpenAI 工具 schema、不支持 SSE，只适合纯聊天兜底
-- 成本与延迟：每次调用都是一个 Devin agent 会话（消耗 ACU、分钟级），仅作兜底；并发默认 2（`DEVIN_PROXY_CONCURRENCY`）
-- 路由配置：`providers` 加 `devin`（见 config.example.json），在 coding / complex / expert 链路 reverix 之后插入 `{ "provider": "devin", "models": ["devin-opus","devin-gpt","devin-gemini"] }`
-- 本机入口：`http://127.0.0.1:8790/v1`；经 Agent Manager 转发可用 `/px/devin/v1`。调用须带本机配置的 Bearer key，`GET /health` 仅表示进程在线，**不表示 CLI 已登录或模型可用**。先运行 `devin auth status` 和 `devin models`，确认账号和实际模型 ID，再决定是否将它排在火山前面。
-- 这不是模型推理 API：请求转换成一次独立的 CLI Agent 会话，仅支持非流式纯文本；含 OpenAI 工具调用、图片等请求会拒绝，不能作为带工具的 Agent 请求的优先上游。`SWE-2-High` 不能凭名称推断已开放，必须在 `devin models` 中确认后映射。
+- 成本与延迟：每次调用都是一个 Devin agent 会话，可能消耗账号额度、延迟高于普通模型 API；并发默认 2（`DEVIN_PROXY_CONCURRENCY`）
+- 路由配置：`providers` 加 `devin`（见 config.example.json），将 `{ "provider": "devin", "models": ["swe-2-high"] }` 放在火山 `ark` 之前。本机 simple/coding 为首选，complex/expert 保留原有 Reverix 首选；各档均在 Devin 后接火山、WorkBuddy、DeepSeek，能力过滤会跳过不适用的 Devin 请求。
+- 本机入口：`http://127.0.0.1:8790/v1`；经 Agent Manager 转发可用 `/px/devin/v1`。调用须带本机配置的 Bearer key，`GET /health` 仅表示进程在线，**不表示 CLI 已登录或模型可用**。先确认 `devin models` 的实际模型 ID，并通过网关发起一次真实补全，再决定是否将它排在火山前面。
+- 这不是模型推理 API：请求转换成一次独立的 CLI Agent 会话，仅支持非流式纯文本；含 OpenAI 工具调用、图片等请求会拒绝，不能作为带工具的 Agent 请求的优先上游。模型列表端点只是配置别名清单，仍须用真实补全验证模型可用性。
 - 离线回归检查：`node --test devin-proxy/proxy.test.mjs`（mock CLI，不消耗 ACU）。
 
 ## 开源方案对照
