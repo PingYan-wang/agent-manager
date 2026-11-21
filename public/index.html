@@ -189,6 +189,29 @@
   .orch-set-group h4{font-size:11px;color:var(--muted);letter-spacing:.08em;margin-bottom:9px;font-weight:600}
   /* ---- 执行树 / 计划视图（白纸 · 发丝线 · 错峰淡入 · 转圈状态点） ---- */
   .orch-tree-view,.orch-plan-view{flex:1;min-height:0;overflow-y:auto;padding:18px 22px;border-top:1px solid var(--line);background:var(--bg,#fbf9f4)}
+  .orch-tree-view{display:flex;gap:0;overflow:hidden;padding:0;flex:1 1 0%;min-height:380px;align-items:stretch}
+  .ot-left{flex:1 1 0%;min-width:0;overflow-y:auto;padding:18px 22px}
+  .ot-right{width:340px;flex:none;border-left:1px solid var(--line);background:var(--surface);overflow-y:auto;padding:18px;display:flex;flex-direction:column;gap:12px;align-self:stretch}
+  .ot-right:empty{display:none}
+  .ot-detail-panel h3{font-size:13px;font-weight:600;margin:0 0 4px;line-height:1.4;word-break:break-all}
+  .ot-detail-panel .dp-sub{font-size:11px;color:var(--muted);font-family:var(--mono);margin-bottom:10px}
+  .ot-detail-panel .dp-row{display:flex;gap:8px;font-size:12px;padding:6px 0;border-bottom:1px dashed var(--line)}
+  .ot-detail-panel .dp-row:last-child{border-bottom:none}
+  .ot-detail-panel .dp-k{width:74px;flex:none;color:var(--muted);font-size:11px}
+  .ot-detail-panel .dp-v{flex:1;min-width:0;word-break:break-all;font-family:var(--mono);font-size:11.5px}
+  .ot-detail-panel .dp-block{background:var(--bg,#fbf9f4);border:1px solid var(--line);border-radius:8px;padding:10px 12px;font-size:11.5px;line-height:1.6;white-space:pre-wrap;word-break:break-all;max-height:220px;overflow-y:auto}
+  .ot-detail-panel .dp-actions{display:flex;gap:6px;flex-wrap:wrap;margin-top:auto;padding-top:10px;border-top:1px solid var(--line)}
+  .ot-detail-panel .dp-gate{background:var(--accent-soft);border:1px solid var(--accent-line);border-radius:8px;padding:8px 10px;font-size:11px;color:var(--accent);line-height:1.5}
+  .ot-prog{position:relative;height:4px;flex:none;width:64px;background:var(--line);border-radius:99px;overflow:hidden}
+  .ot-prog i{position:absolute;left:0;top:0;bottom:0;background:var(--accent);border-radius:99px;transition:width .4s ease}
+  .ot-row.st-done .ot-prog i{background:var(--ok)}
+  .ot-row.st-failed .ot-prog i{background:var(--danger)}
+  .ot-row.st-running .ot-prog i{background:#3b6fd4}
+  .ot-gate{display:inline-flex;align-items:center;gap:3px;font-size:10px;color:var(--warn);background:rgba(138,95,13,.08);border:1px solid rgba(138,95,13,.3);border-radius:99px;padding:1px 6px;flex:none}
+  .ot-row.sel{border-color:var(--accent);box-shadow:0 0 0 2px var(--accent-soft)}
+  .ot-toggle{display:inline-flex;align-items:center;justify-content:center;width:14px;height:14px;flex:none;border:none;background:none;cursor:pointer;color:var(--muted);font-size:10px;padding:0;margin-right:-4px}
+  .ot-toggle:hover{color:var(--accent)}
+  .ot-toggle-sp{width:14px;flex:none;margin-right:-4px}
   .ot-title{font-size:11px;letter-spacing:.1em;color:var(--muted);margin-bottom:14px;font-weight:600}
   .ot-tree{position:relative}
   .ot-kids{position:relative;margin-left:16px;padding-left:20px}
@@ -318,6 +341,25 @@
   .rc-r-grid input{width:100%;min-width:0}
   .rcf-fb{margin-top:10px}
   .rcf-fb textarea{width:100%;font-family:var(--mono);font-size:11.5px}
+  /* 链路编辑器：厂商分组 → 模型行 */
+  .rc-chain-editor{display:flex;flex-direction:column;gap:8px;margin:8px 0 10px}
+  .rc-group{border:1px solid var(--line);border-radius:calc(var(--r) - 2px);padding:8px 10px;background:var(--surface2)}
+  .rc-g-head{display:flex;align-items:center;gap:8px;flex-wrap:wrap}
+  .rc-g-idx{font-family:var(--mono);font-size:10.5px;color:var(--faint);border:1px solid var(--line);border-radius:4px;padding:1px 5px;flex:none}
+  .rc-g-prov{font-size:12.5px;min-width:140px;max-width:230px}
+  .rc-g-note{font-size:11px;margin-right:auto;white-space:nowrap}
+  .rc-g-btns{display:flex;gap:2px;flex:none}
+  .rc-icon{padding:1px 6px;font-size:11px;line-height:1.6;border-radius:5px;min-width:0;color:var(--muted)}
+  .rc-g-custom{display:grid;grid-template-columns:1.5fr 1fr;gap:8px;margin-top:8px}
+  .rc-g-custom label{display:flex;flex-direction:column;gap:4px;font-size:10.5px;color:var(--muted)}
+  .rc-g-custom input{width:100%;min-width:0}
+  .rc-g-models{display:flex;flex-direction:column;gap:5px;margin-top:8px;padding-left:22px;position:relative}
+  .rc-g-models::before{content:"";position:absolute;left:10px;top:4px;bottom:14px;width:1px;background:var(--line)}
+  .rc-model-row{display:flex;align-items:center;gap:6px;position:relative}
+  .rc-m-idx{font-family:var(--mono);font-size:10px;color:var(--faint);width:12px;text-align:right;flex:none}
+  .rc-m-input{flex:0 1 560px;min-width:150px;font-family:var(--mono);font-size:12px}
+  .rc-m-add{align-self:flex-start;margin-left:18px;font-size:11px;padding:2px 8px}
+  .rc-g-add{font-size:11.5px;padding:3px 10px}
   .rc-addrow{display:flex;gap:8px;margin-top:12px;flex-wrap:wrap;align-items:center}
   .rc-addrow input{flex:0 1 220px;min-width:140px}
   .rc-prow{display:flex;gap:10px;align-items:center;padding:8px 0;border-bottom:1px dashed var(--line);font-size:12.5px;flex-wrap:wrap}
@@ -329,6 +371,23 @@
   .rc-brow code{min-width:170px}
   .rc-brow input{width:86px}
   .rc-empty-note{padding:14px 0;color:var(--muted);font-size:12px}
+  /* 吸顶保存条：路由页任何位置都能看见「是否已保存」 */
+  .rc-sticky{position:sticky;top:0;z-index:30;display:flex;align-items:center;gap:10px;flex-wrap:wrap;
+    padding:9px 12px;margin-bottom:12px;border:1px solid var(--line);border-radius:var(--r);
+    background:color-mix(in srgb, var(--surface) 92%, transparent);backdrop-filter:blur(10px);
+    box-shadow:0 2px 10px rgba(0,0,0,.06)}
+  .rc-sticky.dirty{border-color:#f5a524;background:color-mix(in srgb, #f5a524 8%, var(--surface))}
+  .rc-dot{width:8px;height:8px;border-radius:50%;background:#30a46c;flex:none}
+  .rc-sticky.dirty .rc-dot{background:#f5a524}
+  .rc-sticky .rc-actions{margin-left:auto;display:flex;gap:6px;align-items:center;flex-wrap:wrap}
+  .rc-save-btn{background:var(--accent);color:#fff;border-color:transparent}
+  .rc-strategy{font-size:11.5px;min-width:150px}
+  .rc-strat-badge{font-size:10.5px;color:var(--muted);border:1px solid var(--line);border-radius:999px;padding:1px 7px;white-space:nowrap}
+  .rc-cap{display:flex;gap:12px;align-items:center;flex-wrap:wrap;font-size:11px;color:var(--muted);
+    width:100%;padding:2px 0 4px 120px}
+  .rc-cap label{display:inline-flex;gap:4px;align-items:center;white-space:nowrap}
+  .rc-cap input[type=number]{width:74px}
+  .rc-cap .rc-cap-tiers{display:inline-flex;gap:6px;align-items:center;flex-wrap:wrap}
   /* Claude Code 风格状态行（编排页底部） */
   .orch-statusline{display:flex;gap:14px;align-items:center;padding:6px 16px;border-top:1px solid var(--line);font-family:var(--mono);font-size:11px;flex:none;flex-wrap:wrap;min-height:26px}
   .orch-statusline b{color:var(--ink);font-weight:600}
@@ -502,6 +561,16 @@ Dashboard:  http://localhost:3000  (账号见 MCPHub Dashboard)
   </section>
 
   <section id="tab-router" style="display:none">
+    <div class="rc-sticky" id="rcSticky">
+      <span class="rc-dot"></span>
+      <b style="font-size:13px">路由配置</b>
+      <span class="muted" id="rcDirtyText" style="font-size:11.5px">与 config.json 一致</span>
+      <span class="rc-actions">
+        <button class="ghost" onclick="rcJumpConfig()">编辑链路</button>
+        <button class="ghost" id="rcUndoBtn" onclick="rcReloadConfig()">撤销修改</button>
+        <button class="rc-save-btn" id="rcSaveBtn" onclick="rcSaveConfig()">保存配置</button>
+      </span>
+    </div>
     <div class="card">
       <div class="toolbar"><h3>今日用量</h3><span style="margin-left:auto;display:flex;gap:6px;align-items:center"><button class="ghost" onclick="rcUsageView('route')">路线</button><button class="ghost" onclick="rcUsageView('provider')">服务商</button><button class="ghost" onclick="loadRouter()">↻ 刷新</button></span></div>
       <div id="routerStats"><div class="empty">加载中…</div></div>
@@ -526,12 +595,12 @@ Dashboard:  http://localhost:3000  (账号见 MCPHub Dashboard)
       <div class="toolbar"><h3>自动路由</h3><span class="muted" id="routerMeta" style="margin-left:auto"></span></div>
       <div id="routerStatus"><div class="empty">加载中…</div></div>
     </div>
-    <div class="card">
-      <div class="toolbar"><h3>路由策略</h3><span class="muted" style="margin-left:auto">auto 按任务自动分类；也可在 Hermes 中手动选 simple / coding / complex / expert</span></div>
+    <div class="card" id="rcRoutesCard">
+      <div class="toolbar"><h3>路由策略</h3><span class="muted" style="margin-left:auto">auto 按任务自动分类；策略与链路都来自下面的路由配置，保存后立即生效</span><button class="ghost" onclick="rcJumpConfig()">去编辑</button></div>
       <div id="routerRoutes"><div class="empty">加载中…</div></div>
     </div>
-    <div class="card">
-      <div class="toolbar"><h3>路由配置</h3><span class="muted" style="margin-left:auto">自定义厂商与路由；保存后路由器自动热重载，API Key 留空表示不修改</span><button onclick="rcSaveConfig()">保存配置</button></div>
+    <div class="card" id="rcCfgCard">
+      <div class="toolbar"><h3>路由配置</h3><span class="muted" style="margin-left:auto">自定义厂商与路由；保存后路由器自动热重载，API Key 留空表示不修改</span><button class="ghost" onclick="rcReloadConfig()">撤销</button><button onclick="rcSaveConfig()">保存配置</button></div>
       <div class="subtabs">
         <button class="subtab active" data-rcview="routes">路由</button>
         <button class="subtab" data-rcview="providers">厂商</button>
@@ -583,10 +652,21 @@ Dashboard:  http://localhost:3000  (账号见 MCPHub Dashboard)
 </div>
 <script>
 const $ = s => document.querySelector(s);
-const api = async (path, opt={}) => {
-  const r = await fetch(path, { headers:{'Content-Type':'application/json'}, ...opt, body: opt.body ? JSON.stringify(opt.body) : undefined });
-  return r.json();
-};
+const api = (() => {
+  let token = '';
+  const ready = fetch('/api/session').then(r=>r.json()).then(d=>{ token = d.writeToken || ''; }).catch(()=>{});
+  return async (path, opt={}) => {
+    const method = String(opt.method || 'GET').toUpperCase();
+    const headers = { 'Content-Type':'application/json', ...(opt.headers||{}) };
+    if(method !== 'GET' && method !== 'HEAD'){
+      await ready;
+      if(token) headers['x-agent-manager-token'] = token;
+    }
+    const r = await fetch(path, { ...opt, method, headers, body: opt.body ? JSON.stringify(opt.body) : undefined });
+    const ct = r.headers.get('content-type') || '';
+    return ct.includes('application/json') ? r.json() : r.text();
+  };
+})();
 const esc = s => String(s??'').replace(/[&<>"]/g, c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]));
 const toast = (msg, err) => {
   const t = document.createElement('div'); t.className='toast'+(err?' err':''); t.textContent=msg;
@@ -1105,45 +1185,117 @@ function renderOrchComposer(){
   sel.value = cur;
 }
 
-let orchView='chat', orchPool=[], orchTreeTask=null; const orchTreeOpen=new Set();
+let orchView='chat', orchPool=[], orchTreeTask=null, orchSelNodeId=null;
 const ORCH_NODE_ICON={goal:'🎯',plan:'📋',step:'▸',verify:'✔',repair:'🔧',review:'⚖',continue:'↻',split:'⑂'};
 const ORCH_NODE_TXT={pending:'等待',running:'执行中',retrying:'重试中',done:'完成',failed:'失败',awaiting:'待裁决',blocked:'阻塞',split:'已拆解'};
+
+// 折叠状态按 taskId 持久化到 localStorage
+function orchOpenSet(taskId){
+  try{ const raw=localStorage.getItem('orch_tree_open_'+taskId); return new Set(raw?JSON.parse(raw):[]); }catch{ return new Set(); }
+}
+function orchOpenSave(taskId,set){
+  try{ localStorage.setItem('orch_tree_open_'+taskId,JSON.stringify([...set])); }catch{}
+}
+
 function renderOrchTree(t){
   const box=$('#orchTreeView'); if(!box) return;
   const show=orchView==='tree';
-  box.style.display=show?'block':'none';
+  box.style.display=show?'flex':'none';
   const dc=$('#orchChatEl');
   if(dc) dc.style.display=(orchView==='tree'||orchView==='plan')?'none':'';
   if(!show) return;
   orchTreeTask=t;
-  if(orchView!=='tree') return;
   const nodes=(t&&Array.isArray(t.tree))?t.tree:[];
-  if(!nodes.length){ box.innerHTML='<div class="empty">暂无执行树（任务创建后自动生成）</div>'; return; }
+  if(!nodes.length){ box.innerHTML='<div class="ot-left"><div class="empty">暂无执行树（任务创建后自动生成）</div></div>'; return; }
+
+  const openSet=orchOpenSet(t.id);
   const byId={}; nodes.forEach(n=>byId[n.id]=n);
   const kids={}; nodes.forEach(n=>{ const p=n.parentId&&byId[n.parentId]?n.parentId:null; (kids[p]=kids[p]||[]).push(n); });
   const roots=(kids[null]||[]).slice().sort((a,b)=>(a.ts||0)-(b.ts||0));
+  // 首次：默认展开 goal/plan 第一层（子节点可见）
+  if(!openSet.size){
+    roots.forEach(r=>openSet.add(r.id));
+    (kids[null]||[]).forEach(r=>(kids[r.id]||[]).forEach(k=>{ if(k.kind==='plan'||k.kind==='goal') openSet.add(k.id); }));
+  }
   let seq=0;
   const row=(n)=>{
     const st=n.status||'pending';
-    const open=orchTreeOpen.has(n.id);
+    const childNodes=(kids[n.id]||[]).slice().sort((a,b)=>(a.ts||0)-(b.ts||0));
+    const hasKids=childNodes.length>0;
+    const open=openSet.has(n.id);
+    const sel=orchSelNodeId===n.id;
     const i=seq++;
+    const prog=Math.max(0,Math.min(100,Math.round(n.progress||0)));
+    const gate=n.gate&&n.gate.waitingFor&&n.gate.waitingFor.length?n.gate:null;
     const meta=[n.attempt>1?'尝试'+n.attempt:'', n.agent||'', n.ts?orchTime(n.ts):''].filter(Boolean).join(' · ');
-    const detailTxt=[n.detail||'', meta, n.agentId?'instance: '+n.agentId:''].filter(Boolean).join('\n')||'（无详情）';
     const inner=`
-      <div class="ot-row st-${st}" data-act="orch-tree-node" data-id="${esc(n.id)}">
+      <div class="ot-row st-${st}${sel?' sel':''}" data-act="orch-tree-sel" data-id="${esc(n.id)}">
+        ${hasKids?`<button class="ot-toggle" data-act="orch-tree-toggle" data-id="${esc(n.id)}" title="${open?'收起':'展开'}">${open?'▾':'▸'}</button>`:'<span class="ot-toggle-sp"></span>'}
         <span class="ot-dot"></span>
         <span class="ot-kind">${ORCH_NODE_ICON[n.kind]||'·'}</span>
         <span class="ot-label" title="${esc(n.label||n.id)}">${esc(n.label||n.id)}</span>
+        ${gate?`<span class="ot-gate" title="等待 ${gate.waitingFor.map(esc).join(', ')} 完成">🔒 ${gate.waitingFor.length}</span>`:''}
+        ${n.needsDebate?`<span class="ot-gate" style="color:var(--accent);border-color:var(--accent-line);background:var(--accent-soft)" title="需要辩论">⚔</span>`:''}
+        <span class="ot-prog" title="${prog}%"><i style="width:${prog}%"></i></span>
         ${n.agent?`<span class="ot-agent">${esc(n.agent)}</span>`:''}
-        ${n.ts?`<span class="ot-meta">${esc(orchTime(n.ts))}</span>`:''}
         <span class="ot-status">${ORCH_NODE_TXT[st]||st}</span>
-      </div>
-      ${open?`<div class="ot-detail">${esc(detailTxt)}</div>`:''}`;
-    const childNodes=(kids[n.id]||[]).slice().sort((a,b)=>(a.ts||0)-(b.ts||0));
-    if(!childNodes.length) return `<div class="ot-node" style="--i:${i}">${inner}</div>`;
+      </div>`;
+    if(!hasKids||!open) return `<div class="ot-node" style="--i:${i}">${inner}</div>`;
     return `<div class="ot-node" style="--i:${i}">${inner}<div class="ot-kids">${childNodes.map(row).join('')}</div></div>`;
   };
-  box.innerHTML='<div class="ot-title muted">执行树 · 树干 = 编排循环（目标/计划/验收/返工/裁决/续步），分叉 = 子 Agent · 点击节点看详情</div><div class="ot-tree"><div class="ot-kids">'+roots.map(row).join('')+'</div></div>';
+  const treeHtml='<div class="ot-title muted">执行树 · 0.7min+0.3avg 进度聚合 · 点击节点查看详情 · 箭头折叠</div><div class="ot-tree"><div class="ot-kids">'+roots.map(row).join('')+'</div></div>';
+  box.innerHTML='<div class="ot-left">'+treeHtml+'</div><div class="ot-right" id="orchNodeDetail"></div>';
+  // 选中节点详情
+  if(orchSelNodeId && byId[orchSelNodeId]) renderOrchNodeDetail(t, orchSelNodeId);
+  else if(!orchSelNodeId){
+    // 默认选中 goal
+    const goal=nodes.find(n=>n.kind==='goal');
+    if(goal){ orchSelNodeId=goal.id; renderOrchNodeDetail(t,goal.id); }
+  }
+}
+
+// 右侧固定详情面板
+function renderOrchNodeDetail(t, nodeId){
+  const box=$('#orchNodeDetail'); if(!box) return;
+  const n=(t.tree||[]).find(x=>x.id===nodeId);
+  if(!n){ box.innerHTML=''; return; }
+  const st=n.status||'pending';
+  const prog=Math.max(0,Math.min(100,Math.round(n.progress||0)));
+  const step=t.plan&&n.stepId?(t.plan||[]).find(s=>s.id===n.stepId):null;
+  const gate=n.gate;
+  const rows=[
+    ['类型', (ORCH_NODE_ICON[n.kind]||'·')+' '+(n.kind||'-')],
+    ['状态', ORCH_NODE_TXT[st]||st],
+    ['进度', prog+'%'],
+    n.agent?['执行 Agent', n.agent+(n.agentId?' ('+n.agentId+')':'')]:null,
+    n.attempt?['尝试次数', String(n.attempt)]:null,
+    n.depth!==undefined?['递归深度', String(n.depth)]:null,
+    n.ts?['开始时间', orchTime(n.ts)]:null,
+    n.endTs?['结束时间', orchTime(n.endTs)]:null,
+    step&&step.deps&&step.deps.length?['依赖步骤', step.deps.join(', ')]:null,
+    step&&step.parentStep?['父步骤', step.parentStep]:null,
+  ].filter(Boolean);
+  const prompt=step&&step.prompt?step.prompt:'';
+  const result=step&&step.result?step.result:(n.detail||'');
+  const subs=(t.tree||[]).filter(x=>x.parentId===n.id);
+  box.innerHTML=`
+    <div class="ot-detail-panel">
+      <div>
+        <h3>${esc(n.label||n.id)}</h3>
+        <div class="dp-sub">${esc(n.id)}${step?' · step='+esc(step.id):''}</div>
+      </div>
+      ${gate?`<div class="dp-gate">🔒 等待前置步骤完成：${gate.waitingFor.map(esc).join(', ')}</div>`:''}
+      <div>
+        ${rows.map(([k,v])=>`<div class="dp-row"><span class="dp-k">${esc(k)}</span><span class="dp-v">${esc(v)}</span></div>`).join('')}
+      </div>
+      ${prompt?`<div><div style="font-size:11px;color:var(--muted);margin-bottom:4px">提示词</div><div class="dp-block">${esc(prompt)}</div></div>`:''}
+      ${result?`<div><div style="font-size:11px;color:var(--muted);margin-bottom:4px">结果 / 详情</div><div class="dp-block">${esc(String(result).slice(0,4000))}</div></div>`:''}
+      ${subs.length?`<div><div style="font-size:11px;color:var(--muted);margin-bottom:4px">子节点 (${subs.length})</div><div class="dp-block">${subs.map(s=>`${ORCH_NODE_ICON[s.kind]||'·'} ${s.label||s.id} — ${ORCH_NODE_TXT[s.status]||s.status} ${Math.round(s.progress||0)}%`).join('\n')}</div></div>`:''}
+      <div class="dp-actions">
+        <button class="ghost" data-act="orch-node-copy" data-id="${esc(n.id)}">复制结果</button>
+        ${step?`<button class="ghost" data-act="orch-node-open-workdir" data-id="${esc(t.id)}">复制工作目录</button>`:''}
+      </div>
+    </div>`;
 }
 
 function renderOrchPlan(t){
@@ -1421,9 +1573,39 @@ document.addEventListener('click', e => {
   if(act==='skill-inspect'){ skillInspect(d.name); return; }
   if(act==='skill-toggle'){ skillToggle(d.name, d.disabled==='true'); return; }
   if(act==='skill-uninstall'){ skillUninstall(d.name); return; }
-  if(act==='orch-sel'){ orchSelId = d.id; orchChatTask=null; loadOrch(); return; }
+  if(act==='orch-sel'){ orchSelId = d.id; orchChatTask=null; orchSelNodeId=null; loadOrch(); return; }
   if(act==='orch-view'){ orchView=d.view||'chat'; const id=orchChatTask||orchSelId; if(id) renderOrchDetail(id,false); else renderOrchTree(null); return; }
-  if(act==='orch-tree-node'){ if(orchTreeOpen.has(d.id)) orchTreeOpen.delete(d.id); else orchTreeOpen.add(d.id); if(orchTreeTask) renderOrchTree(orchTreeTask); return; }
+  if(act==='orch-tree-toggle'){
+    if(!orchTreeTask) return;
+    const set=orchOpenSet(orchTreeTask.id);
+    if(set.has(d.id)) set.delete(d.id); else set.add(d.id);
+    orchOpenSave(orchTreeTask.id,set);
+    renderOrchTree(orchTreeTask); return;
+  }
+  if(act==='orch-tree-sel'){
+    orchSelNodeId=d.id;
+    if(orchTreeTask){
+      // 只更新选中态和详情，不重渲染整棵树（避免闪烁）
+      document.querySelectorAll('.ot-row.sel').forEach(el=>el.classList.remove('sel'));
+      const row=document.querySelector(`.ot-row[data-act="orch-tree-sel"][data-id="${CSS.escape(d.id)}"]`);
+      if(row) row.classList.add('sel');
+      renderOrchNodeDetail(orchTreeTask,d.id);
+    }
+    return;
+  }
+  if(act==='orch-node-copy'){
+    const t=orchTreeTask; if(!t) return;
+    const n=(t.tree||[]).find(x=>x.id===d.id); if(!n) return;
+    const step=n.stepId?(t.plan||[]).find(s=>s.id===n.stepId):null;
+    const txt=(step&&step.result)||n.detail||'';
+    navigator.clipboard?.writeText(String(txt)).then(()=>toast('已复制')).catch(()=>toast('复制失败',true));
+    return;
+  }
+  if(act==='orch-node-open-workdir'){
+    const t=orchTreeTask;
+    if(t&&t.workdir){ navigator.clipboard?.writeText(t.workdir).then(()=>toast('工作目录路径已复制: '+t.workdir)).catch(()=>toast('复制失败',true)); }
+    return;
+  }
   if(act==='orch-pool-add'){ orchPoolAdd(); return; }
   if(act==='orch-pool-del'){ orchPoolDel(d.id); return; }
   if(act==='orch-pause'){ orchAction(d.id,'pause'); return; }
@@ -1438,17 +1620,292 @@ document.addEventListener('click', e => {
 // ---------- 自动路由 ----------
 // ---------- 路由配置 / 分类器 / Agent 接入 ----------
 let routerCfgData = null;
+let routerHealth = null;
+// 未保存的编辑落到 localStorage：刷新、误关标签页都不会丢
+const RC_DRAFT_KEY = 'agentManager.routerCfgDraft';
+const RC_STRATEGIES = [
+  ['priority', '优先级（按链路顺序）'],
+  ['latency', '低延迟（近期首包）'],
+  ['cost', '低成本（厂商单价）'],
+  ['healthy', '最健康（近期失败少）'],
+];
+let rcDirty = false, rcDraftSavedAt = 0, rcDraftTimer = null;
+function rcStrategyLabel(v){ return (RC_STRATEGIES.find(x=>x[0]===v)||RC_STRATEGIES[0])[1]; }
+function rcReadDraft(){
+  try{ const d=JSON.parse(localStorage.getItem(RC_DRAFT_KEY)||'null'); return d&&d.cfg?d:null; }catch(e){ return null; }
+}
+function rcClearDraft(){ try{ localStorage.removeItem(RC_DRAFT_KEY); }catch(e){} }
+function rcSetDirty(v, why){
+  rcDirty = !!v;
+  const bar=$('#rcSticky'); if(bar) bar.classList.toggle('dirty', rcDirty);
+  const t=$('#rcDirtyText'); if(t) t.textContent = rcDirty ? (why||'有未保存修改 · 已存浏览器草稿，刷新不会丢') : '与 config.json 一致';
+  const b=$('#rcSaveBtn'); if(b) b.textContent = rcDirty ? '保存配置 ●' : '保存配置';
+}
+function rcMarkDirty(){ rcSetDirty(true); rcQueueDraft(); }
+function rcQueueDraft(){
+  clearTimeout(rcDraftTimer);
+  rcDraftTimer = setTimeout(()=>{
+    try{ localStorage.setItem(RC_DRAFT_KEY, JSON.stringify({ts:Date.now(), cfg:rcSerializeConfig()})); rcDraftSavedAt=Date.now(); }catch(e){}
+  }, 250);
+}
+function rcJumpConfig(){
+  const el=document.getElementById('rcCfgCard');
+  if(el) el.scrollIntoView({behavior:'smooth', block:'start'});
+}
 async function loadRouterConfigUI(){
   try{
     const d = await api('/api/router/config');
-    routerCfgData = d.config || null;
-    if(routerCfgData){ renderRouterCfg(); renderRouterClassifier(); }
-    else $('#routerCfg').innerHTML = '<div class="empty">配置加载失败</div>';
+    const server = d.config || null;
+    routerCfgData = server;
+    routerHealth = await api('/api/router/health').catch(()=>routerHealth);
+    // 有草稿就说明上次的编辑没保存成功（保存成功会清掉），直接恢复，避免「一刷新就没了」
+    const draft = rcReadDraft();
+    let restored = false;
+    if(server && draft && draft.cfg && draft.cfg.routes){
+      routerCfgData = draft.cfg; rcDraftSavedAt = draft.ts || 0; restored = true;
+    }
+    if(routerCfgData){
+      renderRouterCfg(); renderRouterClassifier();
+      rcSetDirty(restored, restored ? ('已恢复 '+(rcDraftSavedAt?new Date(rcDraftSavedAt).toLocaleTimeString():'上次')+' 的未保存草稿 · 点「保存配置」写入') : '');
+    } else $('#routerCfg').innerHTML = '<div class="empty">配置加载失败</div>';
   }catch(e){ $('#routerCfg').innerHTML = '<div class="empty">加载失败</div>'; }
 }
-function rcProvSelects(){
-  const provs = Object.keys((routerCfgData&&routerCfgData.providers)||{});
-  return ['', ...provs].map(p=>`<option value="${esc(p)}">${p?esc(p):'直接填写'}</option>`).join('');
+async function rcReloadConfig(){
+  if(rcDirty && !confirm('放弃未保存的修改，回到 config.json 的内容？')) return;
+  rcClearDraft(); rcSetDirty(false); rcModelCache={}; await loadRouterConfigUI();
+}
+function rcFmtLeft(ms){
+  if(!ms||ms<=0) return '';
+  const m=Math.ceil(ms/60000);
+  return m>=60 ? (m/60).toFixed(m%60?1:0)+' 小时' : m+' 分钟';
+}
+function rcHealthOf(pid){
+  return ((routerHealth&&routerHealth.providers)||[]).find(p=>p.id===pid)||null;
+}
+const RC_KIND_CN={quota:'配额耗尽',balance:'余额不足/欠费',auth:'鉴权失败',network:'网络不通',rate:'限流',server:'网关 5xx',model:'单模型故障'};
+async function rcResetBreaker(n){
+  try{
+    const r = await api('/api/router/breaker/reset', {method:'POST', body:{provider:n}});
+    if(r&&r.ok){
+      routerHealth = await api('/api/router/health').catch(()=>routerHealth);
+      renderRouterCfg();
+      toast('已解除 '+n+' 的熔断');
+    } else toast('解除失败', true);
+  }catch(e){ toast('解除失败', true); }
+}
+// ---- 厂商模型目录：下拉可选，也允许手输 ----
+let rcModelCache = {};
+function rcDsId(pid){ return 'rcModels-'+String(pid||'').replace(/[^A-Za-z0-9_-]/g,'_'); }
+function rcKnownModels(pid){
+  const set = new Set(rcModelCache[pid]||[]);
+  const cfg = routerCfgData||{};
+  for(const r of Object.values(cfg.routes||{})) for(const g of (r.chain||[])) if(g&&g.provider===pid) for(const m of (g.models||[])) set.add(m);
+  for(const g of (cfg.reserve||[])) if(g&&g.provider===pid) for(const m of (g.models||[])) set.add(m);
+  return [...set];
+}
+function rcFillDatalist(pid){
+  const dl = document.getElementById(rcDsId(pid));
+  if(!dl) return;
+  dl.innerHTML = rcKnownModels(pid).map(m=>`<option value="${esc(m)}"></option>`).join('');
+}
+async function rcLoadProviderModels(pid, force){
+  if(!pid || pid==='__custom__') return;
+  if(!force && rcModelCache[pid] && rcModelCache[pid].length) return;
+  try{
+    const d = await api('/api/router/models?provider='+encodeURIComponent(pid)+(force?'&refresh=1':''));
+    if(Array.isArray(d.models) && d.models.length){ rcModelCache[pid]=d.models; rcFillDatalist(pid); }
+  }catch(e){}
+}
+async function rcRefreshModels(btn){
+  const pids=Object.keys((routerCfgData&&routerCfgData.providers)||{});
+  if(!pids.length){ toast('先添加厂商', true); return; }
+  const label=btn.textContent;
+  btn.disabled=true; btn.textContent='拉取中…';
+  await Promise.all(pids.map(p=>rcLoadProviderModels(p, true)));
+  btn.disabled=false; btn.textContent=label;
+  const total=pids.reduce((n,p)=>n+((rcModelCache[p]||[]).length),0);
+  toast(`模型清单已刷新：${pids.length} 家厂商 / ${total} 个模型`);
+}
+function rcModelRowHTML(pid, model, mi){
+  return `<div class="rc-model-row">
+    <span class="rc-m-idx">${mi+1}</span>
+    <input class="rc-m-input" list="${pid==='__custom__'?'':rcDsId(pid)}" value="${esc(model||'')}" placeholder="选择模型，或直接输入模型名" autocomplete="off" spellcheck="false">
+    <button class="ghost rc-icon" onclick="rcPickModel(this)" title="展开可选模型">▾</button>
+    <button class="ghost rc-icon" onclick="rcMoveModel(this,-1)" title="上移（更优先）">↑</button>
+    <button class="ghost rc-icon" onclick="rcMoveModel(this,1)" title="下移">↓</button>
+    <button class="ghost danger rc-icon" onclick="rcDelModel(this)" title="移除模型">✕</button>
+  </div>`;
+}
+function rcPickModel(btn){
+  const inp=btn.closest('.rc-model-row').querySelector('.rc-m-input');
+  inp.focus();
+  if(typeof inp.showPicker==='function'){ try{ inp.showPicker(); }catch(e){ /* 浏览器不支持就只聚焦 */ } }
+}
+function rcGroupHTML(g, gi, provs){
+  const pid = g && g.provider ? g.provider : '__custom__';
+  const models = ((g&&g.models)||[]).filter(Boolean);
+  const opts = Object.keys(provs).map(p=>`<option value="${esc(p)}"${p===pid?' selected':''}>${esc(p)}${provs[p].label?' · '+esc(provs[p].label):''}</option>`).join('')
+    + `<option value="__custom__"${pid==='__custom__'?' selected':''}>自定义地址…</option>`;
+  const rows = (models.length?models:['']).map((m,mi)=>rcModelRowHTML(pid,m,mi)).join('');
+  const cap = provs[pid] && provs[pid].capabilities;
+  const capNote = cap && cap.tools === false
+    ? `<span style="color:#e5484d;font-size:10.5px;white-space:nowrap" title="该厂商声明不支持工具调用，带工具的 Agent 请求会跳过它">仅纯聊天</span>`
+    : '';
+  return `<div class="rc-group" data-provider="${esc(pid)}">
+    <div class="rc-g-head">
+      <span class="rc-g-idx">${gi+1}</span>
+      <select class="rc-g-prov" onchange="rcGroupProvChange(this)">${opts}</select>
+      <span class="rc-g-note muted">${gi===0?'首选厂商':'第 '+(gi+1)+' 家兜底'}</span>${capNote}
+      <span class="rc-g-btns">
+        <button class="ghost rc-icon" onclick="rcMoveGroup(this,-1)" title="上移（更优先）">↑</button>
+        <button class="ghost rc-icon" onclick="rcMoveGroup(this,1)" title="下移">↓</button>
+        <button class="ghost danger rc-icon" onclick="rcDelGroup(this)" title="移除该厂商">✕</button>
+      </span>
+    </div>
+    <div class="rc-g-custom" style="display:${pid==='__custom__'?'grid':'none'}">
+      <label>Base URL<input class="rc-g-url" value="${esc((g&&g.baseUrl)||'')}" placeholder="https://.../v1"></label>
+      <label>API Key<input class="rc-g-key" type="password" value="${g&&g.apiKey&&g.apiKey!=='***'?esc(g.apiKey):''}" placeholder="${g&&g.apiKey==='***'?'已配置 · 留空不变':'API Key'}"></label>
+    </div>
+    <div class="rc-g-models">${rows}
+      <button class="ghost rc-m-add" onclick="rcAddModel(this)">＋ 模型</button>
+    </div>
+  </div>`;
+}
+function rcRenumber(box){
+  box.querySelectorAll('.rc-group').forEach((g,gi)=>{
+    const idx=g.querySelector('.rc-g-idx'); if(idx) idx.textContent=gi+1;
+    const note=g.querySelector('.rc-g-note'); if(note) note.textContent = gi===0?'首选厂商':'第 '+(gi+1)+' 家兜底';
+    g.querySelectorAll('.rc-model-row').forEach((row,mi)=>{ const n=row.querySelector('.rc-m-idx'); if(n) n.textContent=mi+1; });
+  });
+}
+function rcGroupProvChange(sel){
+  const g=sel.closest('.rc-group');
+  const pid=sel.value;
+  g.dataset.provider=pid;
+  const cus=g.querySelector('.rc-g-custom'); if(cus) cus.style.display = pid==='__custom__'?'grid':'none';
+  g.querySelectorAll('.rc-m-input').forEach(i=>i.setAttribute('list', pid==='__custom__'?'':rcDsId(pid)));
+  if(pid!=='__custom__'){ rcFillDatalist(pid); rcLoadProviderModels(pid); }
+  rcMarkDirty();
+}
+function rcAddGroup(btn){
+  const box=btn.closest('.rc-route');
+  const wrap=box.querySelector('.rc-chain-editor');
+  const provs=(routerCfgData&&routerCfgData.providers)||{};
+  const first=Object.keys(provs)[0]||'__custom__';
+  wrap.insertAdjacentHTML('beforeend', rcGroupHTML({provider:first,models:['']}, wrap.querySelectorAll('.rc-group').length, provs));
+  rcRenumber(box); rcMarkDirty();
+}
+function rcDelGroup(btn){
+  const box=btn.closest('.rc-route');
+  const g=btn.closest('.rc-group');
+  if(box.querySelectorAll('.rc-group').length<=1){ toast('至少保留一家厂商', true); return; }
+  g.remove(); rcRenumber(box); rcMarkDirty();
+}
+function rcMoveGroup(btn,dir){
+  const g=btn.closest('.rc-group');
+  const sib=dir<0?g.previousElementSibling:g.nextElementSibling;
+  if(!sib||!sib.classList.contains('rc-group')) return;
+  if(dir<0) g.parentNode.insertBefore(g,sib); else g.parentNode.insertBefore(sib,g);
+  rcRenumber(btn.closest('.rc-route')); rcMarkDirty();
+}
+function rcAddModel(btn){
+  const g=btn.closest('.rc-group');
+  const rows=g.querySelectorAll('.rc-model-row').length;
+  g.querySelector('.rc-g-models').insertAdjacentHTML('beforeend', rcModelRowHTML(g.dataset.provider,'',rows));
+  rcRenumber(btn.closest('.rc-route')); rcMarkDirty();
+}
+function rcDelModel(btn){
+  const g=btn.closest('.rc-group');
+  const row=btn.closest('.rc-model-row');
+  if(g.querySelectorAll('.rc-model-row').length<=1){
+    const inp=row.querySelector('.rc-m-input');
+    inp.value=''; inp.focus();
+    toast('已清空该模型；不需要这家厂商就点该组右上角 ✕');
+    return;
+  }
+  row.remove(); rcRenumber(btn.closest('.rc-route')); rcMarkDirty();
+}
+function rcMoveModel(btn,dir){
+  const row=btn.closest('.rc-model-row');
+  const sib=dir<0?row.previousElementSibling:row.nextElementSibling;
+  if(!sib||!sib.classList.contains('rc-model-row')) return;
+  if(dir<0) row.parentNode.insertBefore(row,sib); else row.parentNode.insertBefore(sib,row);
+  rcRenumber(btn.closest('.rc-route')); rcMarkDirty();
+}
+function rcRouteChainFromDOM(el){
+  const chain=[];
+  el.querySelectorAll('.rc-group').forEach(g=>{
+    const pid=(g.querySelector('.rc-g-prov')||{}).value||'';
+    const models=[...g.querySelectorAll('.rc-m-input')].map(i=>i.value.trim()).filter(Boolean);
+    if(!models.length) return;
+    const uniq=[...new Set(models)];
+    if(pid==='__custom__'){
+      chain.push({baseUrl:(g.querySelector('.rc-g-url')||{}).value.trim()||'', apiKey:(g.querySelector('.rc-g-key')||{}).value.trim()||'***', models:uniq});
+    } else if(pid){
+      chain.push({provider:pid, models:uniq});
+    }
+  });
+  return chain;
+}
+// 从编辑区读出全部路由（含策略）；任何一档为空就整体拒绝保存，避免写坏线上配置
+function rcRoutesFromDOM(){
+  const routes={}; let bad='';
+  document.querySelectorAll('#routerCfg .rc-route').forEach(el=>{
+    if(bad) return;
+    const name=el.dataset.name;
+    const emptyGroup=[...el.querySelectorAll('.rc-group')].find(g=>![...g.querySelectorAll('.rc-m-input')].some(i=>i.value.trim()));
+    if(emptyGroup){ bad=`路由 ${name} 里有一家厂商还没填模型；不需要就点该组的 ✕ 删掉`; return; }
+    const chain=rcRouteChainFromDOM(el);
+    if(!chain.length){ bad=`路由 ${name} 至少选一家厂商并填一个模型`; return; }
+    const noAddr=chain.find(g=>!g.provider&&!g.baseUrl);
+    if(noAddr){ bad=`路由 ${name} 存在没有 Base URL 的自定义分组`; return; }
+    const sel=el.querySelector('.rc-r-strategy');
+    const strategy=(sel&&sel.value)||'priority';
+    routes[name]= strategy==='priority' ? {chain} : {strategy, chain};
+  });
+  return {routes, bad};
+}
+// 把界面上所有可编辑项写回一份完整配置（厂商能力、单价、预算、分类器）
+function rcSerializeConfig(){
+  const cfg=JSON.parse(JSON.stringify(routerCfgData||{}));
+  document.querySelectorAll('#routerCfg .rc-prow').forEach(row=>{
+    const pid=row.dataset.pid;
+    if(!pid||!cfg.providers||!cfg.providers[pid]) return;
+    const p=cfg.providers[pid];
+    const costEl=row.querySelector('.rc-cap-cost');
+    if(costEl){ const c=parseFloat(costEl.value); if(c>0) p.cost=c; else delete p.cost; }
+    const toolsEl=row.querySelector('.rc-cap-tools');
+    const charsEl=row.querySelector('.rc-cap-chars');
+    const msgsEl=row.querySelector('.rc-cap-msgs');
+    const tierEls=[...row.querySelectorAll('.rc-cap-tier')];
+    const cap={};
+    if(toolsEl && !toolsEl.checked) cap.tools=false;
+    const chars=charsEl?parseInt(charsEl.value,10):NaN;
+    if(chars>0) cap.maxChars=chars;
+    const msgs=msgsEl?parseInt(msgsEl.value,10):NaN;
+    if(msgs>0) cap.maxMessages=msgs;
+    const tiers=tierEls.filter(x=>x.checked).map(x=>x.dataset.tier);
+    if(tierEls.length && tiers.length && tiers.length<tierEls.length) cap.tiers=tiers;
+    if(Object.keys(cap).length) p.capabilities=cap; else delete p.capabilities;
+  });
+  const {routes}=rcRoutesFromDOM();
+  if(Object.keys(routes).length) cfg.routes=routes;
+  const budgets={};
+  document.querySelectorAll('#routerCfg .rc-budget').forEach(el=>{
+    const host=el.dataset.host; const b={};
+    const usd=parseFloat(el.querySelector('.rc-busd').value), req=parseInt(el.querySelector('.rc-breq').value,10);
+    if(!isNaN(usd)&&usd>0) b.usd=usd;
+    if(!isNaN(req)&&req>0) b.requests=req;
+    if(Object.keys(b).length) budgets[host]=b;
+  });
+  cfg.budgets=budgets;
+  const modeEl=$('#rcClfMode');
+  if(modeEl){
+    cfg.classifier = modeEl.value==='cloud'
+      ? {mode:'cloud', route:$('#rcClfRoute').value, model:$('#rcClfModel').value.trim()}
+      : {mode:'local', model:($('#rcClfLocalCustom').value.trim() || $('#rcClfLocalModel').value || '')};
+  }
+  return cfg;
 }
 let rcView='routes';
 function rcSub(v){
@@ -1462,33 +1919,59 @@ function renderRouterCfg(){
   // ---- 路由 ----
   let routes = '';
   for(const [name,r] of Object.entries(cfg.routes||{})){
-    const curProv = r.provider && provs[r.provider] ? r.provider : '';
-    const fbLines = (r.fallbacks||[]).map(f=>{
-      if(f.baseUrl && f.baseUrl!==r.baseUrl) return `${f.model} | ${f.baseUrl} | ${f.apiKey&&f.apiKey!=='***'?f.apiKey:''}`;
-      return f.model;
-    }).join('\n');
+    const chain = (Array.isArray(r.chain)&&r.chain.length)
+      ? r.chain
+      : (r.model ? [{provider:r.provider||'', models:[r.model]}] : []);
+    const groups = (chain.length?chain:[{provider:Object.keys(provs)[0]||'', models:['']}])
+      .map((g,gi)=>rcGroupHTML(g,gi,provs)).join('');
+    const strat = r.strategy || 'priority';
+    const stratOpts = RC_STRATEGIES.map(([v,label])=>`<option value="${v}" ${strat===v?'selected':''}>${label}</option>`).join('');
     routes += `<div class="rc-route" data-name="${esc(name)}">
      <div class="rc-r-head"><span class="rc-r-name">${esc(name)}</span>
-       <span class="muted" style="font-size:11px">主模型失败自动切备选</span>
-       <select class="rc-provsel">${rcProvSelects().replace(`<option value="${curProv}">`, `<option value="${curProv}" selected>`)}</select>
-       <button class="ghost danger" onclick="rcDelRoute('${esc(name)}')">删除</button></div>
-     <div class="rc-r-grid">
-      <label>模型<input class="rc-model" value="${esc(r.model)}" placeholder="模型名"></label>
-      <label>Base URL<input class="rc-url" value="${curProv?'':esc(r.baseUrl)}" placeholder="https://.../v1"></label>
-      <label>API Key<input class="rc-key" type="password" value="${r.apiKey==='***'?'':esc(r.apiKey||'')}" placeholder="${r.apiKey==='***'?'已配置·留空不变':'API Key'}"></label>
-     </div>
-     <label class="rcf-fb">备选链 · 每行一个：<code>model</code> 或 <code>model | baseUrl | apiKey</code>
-      <textarea class="rc-fb" rows="2" placeholder="glm-5.3-flash&#10;deepseek-v4.1-flash | https://... | key">${esc(fbLines)}</textarea></label></div>`;
+       <label class="muted" style="font-size:11px;display:inline-flex;gap:5px;align-items:center;margin-left:6px">策略
+         <select class="rc-r-strategy" onchange="rcMarkDirty()" title="只重排本档内的厂商/模型顺序，不改变链路成员">${stratOpts}</select></label>
+       <span class="muted" style="font-size:11px">模型问题换模型 · 厂商问题换厂商</span>
+       <button class="ghost danger" style="margin-left:auto" onclick="rcDelRoute('${esc(name)}')">删除</button></div>
+     <div class="rc-chain-editor">${groups}</div>
+     <button class="ghost rc-g-add" onclick="rcAddGroup(this)">＋ 添加厂商</button></div>`;
   }
-  routes = `<div class="muted" style="font-size:11.5px;margin-bottom:4px">每条路由 = 接入来源 + 主模型 + 备选链；「接入」选厂商则自动带出地址与密钥</div>` +
+  const datalists = Object.keys(provs).map(p=>`<datalist id="${rcDsId(p)}">${rcKnownModels(p).map(m=>`<option value="${esc(m)}"></option>`).join('')}</datalist>`).join('');
+  const reserveLine = (cfg.reserve||[]).length
+    ? `<div class="muted" style="font-size:11px;margin:2px 0 6px">兜底池（所有路由的最后顺位）· ${cfg.reserve.map(g=>`${esc(g.provider)}/${esc((g.models||[]).join(', '))}`).join(' → ')}</div>`
+    : '';
+  const cloudIds = Object.keys(provs).filter(n=>n!=='local');
+  const downIds = cloudIds.filter(n=>{const h=rcHealthOf(n);return h&&h.open;});
+  const cloudDown = (cloudIds.length>0 && downIds.length===cloudIds.length)
+    ? `<div style="margin:6px 0 10px;padding:8px 10px;border-left:3px solid #e5484d;background:rgba(229,72,77,.07);font-size:12px;line-height:1.6">
+        <b style="color:#e5484d">云端上游当前全部不可用</b>：${downIds.map(n=>{const h=rcHealthOf(n)||{};return `${esc(n)}（${esc(RC_KIND_CN[h.kind]||h.kind||'熔断')}${rcFmtLeft(h.leftMs)?' · '+rcFmtLeft(h.leftMs):''}）`;}).join('、')}。
+        现在只有本地小模型能做纯聊天；带工具的 Agent 请求会立刻报错（不再让客户端 30 秒一轮地重试），而不是让 3B 编一个假答案。</div>`
+    : '';
+  routes = cloudDown + `<div class="muted" style="font-size:11.5px;margin-bottom:4px">链路顺序 = 厂商优先级：同厂商内先换模型；整家不可用（余额/配额/鉴权/网络）才按顺序切下一家。模型可从下拉选，也可直接输入新名字；每档的「策略」只在该档内部重排，不会把请求送进能力不匹配的厂商
+    <button class="ghost rc-icon" style="margin-left:6px" onclick="rcRefreshModels(this)" title="重新向上游拉取模型清单">↻ 刷新模型清单</button></div>` + reserveLine +
     (routes || '<div class="rc-empty-note">暂无路由</div>') +
-    `<div class="rc-addrow"><input id="rcNewRoute" placeholder="新路由名（如 fast / vision）"><button class="ghost" onclick="rcAddRoute()">＋ 添加路由</button></div>`;
+    `<div class="rc-addrow"><input id="rcNewRoute" placeholder="新路由名（如 fast / vision）"><button class="ghost" onclick="rcAddRoute()">＋ 添加路由</button></div>` +
+    datalists;
   // ---- 厂商 ----
+  const routeNames = Object.keys(cfg.routes||{});
   const provRows = Object.entries(provs).map(([n,p])=>{
-    const refs = Object.values(cfg.routes||{}).filter(x=>x.provider===n).length;
-    return `<div class="rc-prow"><span class="rc-pname">${esc(n)}</span><span class="rc-purl">${esc(p.baseUrl)}</span><span class="muted">${p.apiKey?'key ✓':'无 key'}${refs?' · '+refs+' 条路由引用':''}</span><button class="ghost danger" onclick="rcDelProvider('${esc(n)}')">删除</button></div>`;
+    const refs = Object.values(cfg.routes||{}).filter(x=>(x.chain||[]).some(g=>g.provider===n)).length;
+    const hp = rcHealthOf(n);
+    const badge = hp
+      ? (hp.open
+        ? `<span style="color:#e5484d;font-size:11px;white-space:nowrap">● 熔断 ${rcFmtLeft(hp.leftMs)}${hp.kind?' · '+esc(hp.kind):''}</span>`
+        : `<span style="color:#30a46c;font-size:11px;white-space:nowrap">● 正常</span>`)
+      : `<span class="muted" style="font-size:11px">● 未知</span>`;
+    const cap = p.capabilities || {};
+    const tierEls = routeNames.map(t=>`<label><input type="checkbox" class="rc-cap-tier" data-tier="${esc(t)}" ${(!Array.isArray(cap.tiers)||cap.tiers.includes(t))?'checked':''}> ${esc(t)}</label>`).join('');
+    const capLine = `<div class="rc-cap">
+      <label title="关闭后，带工具调用的 Agent 请求会跳过这家厂商"><input type="checkbox" class="rc-cap-tools" ${cap.tools!==false?'checked':''}> 可接工具</label>
+      <label>上下文字符<input class="rc-cap-chars" type="number" min="0" step="1000" value="${cap.maxChars||''}" placeholder="不限"></label>
+      <label>最大消息<input class="rc-cap-msgs" type="number" min="0" value="${cap.maxMessages||''}" placeholder="不限"></label>
+      <label title="USD / 1M tokens，strategy=cost 时用它排序">单价 $/1M<input class="rc-cap-cost" type="number" min="0" step="0.1" value="${p.cost||''}" placeholder="—"></label>
+      <span class="rc-cap-tiers">可接档位：${tierEls}</span></div>`;
+    return `<div class="rc-prow" data-pid="${esc(n)}"><span class="rc-pname">${esc(n)}</span><span class="rc-purl">${esc(p.baseUrl)}</span>${badge}<span class="muted">${p.apiKey?'key ✓':'无 key'}${refs?' · '+refs+' 条路由引用':''}</span>${hp&&hp.open?`<button class="ghost" onclick="rcResetBreaker('${esc(n)}')">解除熔断</button>`:''}<button class="ghost danger" onclick="rcDelProvider('${esc(n)}')">删除</button>${capLine}</div>`;
   }).join('');
-  const providers = `<div class="muted" style="font-size:11.5px;margin-bottom:6px">OpenAI 兼容接口；路由可引用厂商或直接填写地址</div>` +
+  const providers = `<div class="muted" style="font-size:11.5px;margin-bottom:6px">OpenAI 兼容接口；熔断状态来自路由器实时 health。「可接工具 / 上下文字符 / 最大消息 / 可接档位」就是能力守卫的依据——填了之后，不满足的请求会跳过这家厂商（本地小模型务必关掉工具）</div>` +
     (provRows || '<div class="rc-empty-note">暂无厂商</div>') +
     `<div class="rc-addrow"><input id="rcProvName" placeholder="厂商名"><input id="rcProvUrl" placeholder="https://api.example.com/v1" style="flex:1;min-width:200px"><input id="rcProvKey" type="password" placeholder="API Key"><button class="ghost" onclick="rcAddProvider()">＋ 添加厂商</button></div>`;
   // ---- 预算 ----
@@ -1503,19 +1986,46 @@ function renderRouterCfg(){
     `<div id="rcView-providers" style="display:none">${providers}</div>` +
     `<div id="rcView-budgets" style="display:none">${buds}</div>`;
   rcSub(rcView);
+  renderRoutesView();
+  // 首次渲染后异步补全各厂商真实模型清单（服务端缓存 10 分钟，失败退回配置里出现过的模型）
+  Object.keys(provs).forEach(p=>{ rcLoadProviderModels(p); });
+}
+// 顶部「路由策略」总览：直接读配置对象，改完链路/策略立刻反映，不再走另外一份接口
+function renderRoutesView(){
+  const cfg = routerCfgData; const el = $('#routerRoutes'); if(!cfg || !el) return;
+  const provs = cfg.providers || {};
+  const rows = Object.entries(cfg.routes||{}).map(([name,r])=>{
+    const chain = (Array.isArray(r.chain)&&r.chain.length)
+      ? r.chain
+      : (r.model ? [{provider:r.provider||'', models:[r.model]}] : []);
+    const path = chain.map((g)=>{
+      const hp = rcHealthOf(g.provider);
+      const dot = hp && hp.open ? ' <span style="color:#e5484d">●</span>' : '';
+      const label = g.provider ? `${esc(g.provider)}` : esc(g.baseUrl||'custom');
+      return `<span class="mono" style="font-size:11.5px">${label}/${(g.models||[]).map(esc).join(' · ')}${dot}</span>`;
+    }).join(' <span class="muted">⟹</span> ');
+    return `<tr><td class="name">${esc(name)}</td><td><span class="rc-strat-badge">${esc(rcStrategyLabel(r.strategy||'priority'))}</span></td><td>${path}</td></tr>`;
+  }).join('');
+  const reserve = (cfg.reserve||[]).length
+    ? `<div class="muted" style="margin-top:8px;font-size:11.5px">兜底池（所有档位最后顺位）：${cfg.reserve.map(g=>`${esc(g.provider)}/${esc((g.models||[]).join(' · '))}`).join(' → ')}</div>` : '';
+  const hint = `<div class="muted" style="margin-top:6px;font-size:11.5px">策略含义：优先级=按链路顺序；低延迟=近期首包快的排前；低成本=单价低的排前；最健康=近期失败少的排前。策略只在同一档内部重排。</div>`;
+  el.innerHTML = rows ? `<table><tr><th>路线</th><th>策略</th><th>链路（同厂商内从左到右）</th></tr>${rows}</table>${reserve}${hint}` : '<div class="empty">暂无路由配置</div>';
 }
 function rcAddProvider(){
   const n=$('#rcProvName').value.trim(), u=$('#rcProvUrl').value.trim(), k=$('#rcProvKey').value.trim();
   if(!n||!u){alert('厂商名和地址必填');return;}
   if(!routerCfgData.providers) routerCfgData.providers={};
   routerCfgData.providers[n]={baseUrl:u, apiKey:k};
-  renderRouterCfg();
+  renderRouterCfg(); rcMarkDirty();
 }
 function rcDelProvider(n){
-  if(!confirm('删除厂商 '+n+'？引用它的路由需改为直接填写')) return;
+  if(!confirm('删除厂商 '+n+'？引用它的路由链路需改为其它厂商')) return;
   delete routerCfgData.providers[n];
-  for(const r of Object.values(routerCfgData.routes||{})) if(r.provider===n) delete r.provider;
-  renderRouterCfg();
+  for(const r of Object.values(routerCfgData.routes||{})){
+    if(Array.isArray(r.chain)) r.chain = r.chain.filter(g=>g.provider!==n);
+    if(r.provider===n) delete r.provider;
+  }
+  renderRouterCfg(); rcMarkDirty();
 }
 function rcAddBudget(){
   const host = ($('#rcBHost').value||'').trim();
@@ -1527,61 +2037,65 @@ function rcAddBudget(){
   if(!Object.keys(b).length){ toast('请至少填写一个限额', true); return; }
   routerCfgData.budgets = routerCfgData.budgets || {};
   routerCfgData.budgets[host] = b;
-  renderRouterCfg();
+  renderRouterCfg(); rcMarkDirty();
 }
 function rcDelBudget(host){
   if(routerCfgData.budgets) delete routerCfgData.budgets[host];
-  renderRouterCfg();
+  renderRouterCfg(); rcMarkDirty();
 }
 function rcAddRoute(){
   const n=$('#rcNewRoute').value.trim();
   if(!n){alert('请输入路由名');return;}
   if(routerCfgData.routes[n]){alert('路由已存在');return;}
-  routerCfgData.routes[n]={model:'',baseUrl:'',apiKey:'***',fallbacks:[]};
-  renderRouterCfg();
+  routerCfgData.routes[n]={strategy:'priority', chain:[]};
+  renderRouterCfg(); rcMarkDirty();
 }
 function rcDelRoute(n){
   if(Object.keys(routerCfgData.routes).length<=1){alert('至少保留一条路由');return;}
   if(!confirm('删除路由 '+n+'？')) return;
   delete routerCfgData.routes[n];
-  renderRouterCfg();
+  renderRouterCfg(); rcMarkDirty();
 }
 async function rcSaveConfig(){
-  const cfg = JSON.parse(JSON.stringify(routerCfgData));
-  const routes = {};
-  document.querySelectorAll('#routerCfg .rc-route').forEach(el=>{
-    const name = el.dataset.name;
-    const prov = el.querySelector('.rc-provsel').value;
-    const provCfg = prov && cfg.providers && cfg.providers[prov];
-    const baseUrl = provCfg ? provCfg.baseUrl : el.querySelector('.rc-url').value.trim();
-    const apiKey = provCfg ? '***' : (el.querySelector('.rc-key').value.trim() || '***');
-    const model = el.querySelector('.rc-model').value.trim();
-    const fbs = [];
-    el.querySelector('.rc-fb').value.split('\n').map(x=>x.trim()).filter(Boolean).forEach(line=>{
-      const p = line.split('|').map(x=>x.trim());
-      if(p.length===1) fbs.push({model:p[0]});
-      else if(p.length>=2) fbs.push({model:p[0], baseUrl:p[1]||'', apiKey:p[2]||''});
-    });
-    routes[name] = {model, baseUrl, apiKey, fallbacks:fbs, ...(prov?{provider:prov}:{})};
-  });
-  if(!Object.keys(routes).length){alert('至少保留一条路由');return;}
+  if(!routerCfgData){ toast('配置还没加载完', true); return; }
+  const {routes, bad} = rcRoutesFromDOM();
+  if(bad){ alert(bad); return; }
+  if(!Object.keys(routes).length){ alert('至少保留一条路由'); return; }
+  const cfg = rcSerializeConfig();
   cfg.routes = routes;
-  const budgets = {};
-  document.querySelectorAll('#routerCfg .rc-budget').forEach(el=>{
-    const host = el.dataset.host; const b = {};
-    const usd = parseFloat(el.querySelector('.rc-busd').value), req = parseInt(el.querySelector('.rc-breq').value, 10);
-    if(!isNaN(usd) && usd > 0) b.usd = usd;
-    if(!isNaN(req) && req > 0) b.requests = req;
-    if(Object.keys(b).length) budgets[host] = b;
-  });
-  cfg.budgets = budgets;
-  const mode = $('#rcClfMode').value;
-  if(mode==='cloud') cfg.classifier = {mode:'cloud', route:$('#rcClfRoute').value, model:$('#rcClfModel').value.trim()};
-  else cfg.classifier = {mode:'local', model:($('#rcClfLocalCustom').value.trim() || $('#rcClfLocalModel').value || '')};
-  const r = await api('/api/router/config', {method:'PUT', body:cfg});
-  if(r.ok){ alert('已保存'+(r.reloaded?'，路由器已热重载':'，路由器重启中')); loadRouterConfigUI(); }
-  else alert('保存失败：'+(r.error||JSON.stringify(r)));
+  const btn = $('#rcSaveBtn');
+  if(btn){ btn.disabled = true; btn.textContent = '保存中…'; }
+  try{
+    const r = await api('/api/router/config', {method:'PUT', body:cfg});
+    if(r && r.ok){
+      rcClearDraft();
+      rcSetDirty(false);
+      toast('已保存' + (r.reloaded ? '，路由器已热重载' : '，路由器重启中'));
+      await loadRouterConfigUI();
+    } else {
+      alert('保存失败：' + ((r && r.error) || JSON.stringify(r)));
+    }
+  }catch(e){
+    alert('保存失败：' + (e && e.message || e));
+    rcQueueDraft();
+  }finally{
+    if(btn){ btn.disabled = false; }
+    rcSetDirty(rcDirty);
+  }
 }
+// 编辑区任何改动都标脏 + 写草稿；用事件委托，动态增删的行也覆盖
+document.addEventListener('input', (e)=>{
+  if(e.target && e.target.closest && e.target.closest('#routerCfg')) rcMarkDirty();
+}, true);
+document.addEventListener('change', (e)=>{
+  if(e.target && e.target.closest && e.target.closest('#routerCfg')) rcMarkDirty();
+}, true);
+window.addEventListener('beforeunload', (e)=>{
+  if(!rcDirty) return;
+  e.preventDefault();
+  e.returnValue = '路由配置还有未保存的修改';
+  return e.returnValue;
+});
 function renderRouterClassifier(){
   const cfg = routerCfgData; if(!cfg) return;
   const c = cfg.classifier || {mode:'cloud', route:'simple', model:''};
@@ -1708,14 +2222,17 @@ function renderRouterStatus(st){
   if(!st || st.error){ $('#routerStatus').innerHTML = `<div class="empty">${esc((st&&st.error)||'加载失败')}</div>`; return; }
   $('#routerMeta').textContent = st.classifier ? `分类器 ${st.classifier}` : '';
   const badge = (ok, label) => `<span class="badge ${ok?'on':'off'}">${label}</span>`;
+  const hp = routerHealth || {};
+  const provRows = (hp.providers||[]).map(p=>{
+    const left = p.open ? rcFmtLeft(p.leftMs) : '';
+    return `<span class="badge ${p.open?'warn':'on'}" title="${esc(p.reason||'')}">${esc(p.id)}${p.open?' · '+esc(RC_KIND_CN[p.kind]||p.kind||'熔断')+(left?' '+left:''):' 正常'}</span>`;
+  }).join(' ');
   $('#routerStatus').innerHTML = `<div style="display:flex;gap:8px;flex-wrap:wrap;align-items:center">
-    ${badge(st.routerOk,'路由器 :8788')}${badge(st.ollamaOk,'Ollama')}${badge(!!st.classifier,'本地分类器')}
-    <button class="ghost" onclick="routerRestart()">重启路由器</button></div>`;
-  const rows = Object.entries(st.routes||{}).map(([name,r])=>{
-    const chain = [r.model, ...(r.fallbacks||[])].join(' → ');
-    return `<tr><td class="name">${esc(name)}</td><td class="mono">${esc(chain)}</td><td class="path">${esc(r.host)}</td></tr>`;
-  }).join('');
-  $('#routerRoutes').innerHTML = rows ? `<table><tr><th>路线</th><th>模型链（主 → 备选）</th><th>上游</th></tr>${rows}</table>` : '<div class="empty">无路由配置</div>';
+    ${badge(st.routerOk,'路由器 :8788')}${badge(st.ollamaOk,'Ollama')}${badge(!!st.classifier,'分类器')}
+    <button class="ghost" onclick="routerRestart()">重启路由器</button>
+    <span class="muted" style="font-size:11.5px">守卫：带工具请求自动升档 · 能力不匹配直接跳过</span></div>
+    ${provRows?`<div style="display:flex;gap:6px;flex-wrap:wrap;margin-top:8px">${provRows}</div>`:''}`;
+  renderRoutesView();
 }
 const ROUTE_COLORS = { simple: '#4f8cff', coding: '#3fb96b', complex: '#9b6bff', expert: '#e5534b' };
 function renderRouterStats(ss){

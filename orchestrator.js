@@ -1,7 +1,8 @@
 // orchestrator.js — 跨 Agent 任务编排器（Loop + 子 Agent + 辩论 + 自动续步）
 // 由 server.js 挂载: initOrchestrator() 启动 tick; handleOrchestratorApi() 处理 /api/orchestrator/*
-import { readFile, writeFile, mkdir, access } from 'node:fs/promises';
-import { spawn, execFile } from 'node:child_process';
+import { readFile, writeFile, mkdir, access, rename, unlink } from 'node:fs/promises';
+import { spawn } from 'node:child_process';
+import { randomUUID } from 'node:crypto';
 import os from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -63,26 +64,72 @@ const AGENT_WORKERS = {
 // ---------- state ----------
 let state = { config: structuredClone(DEFAULT_CONFIG), tasks: [], agents: [] }; // agents: 子 Agent 池实例
 let dirty = false;
+let saveFlight = null;
+let tickFlight = null;
+let initialized = false;
+let initFlight = null;
+let shuttingDown = false;
+let tickTimer = null;
+let saveTimer = null;
+const executions = new WeakMap();
+const runtime = { fetch: (...args) => fetch(...args), workers: AGENT_WORKERS, killGraceMs: 1000,
+  writeFile, rename };
 const pendingDispatch = new Map(); // taskId -> Map(stepKey -> Promise)
 const running = new Map(); // stepKey -> {child, taskId, stepId, agent, startedAt}
 
+class Cancelled extends Error {}
+function executionFor(task) {
+  if (!executions.has(task)) executions.set(task, { controller: new AbortController(), plannerVersion: 0, planners: new Set() });
+  return executions.get(task);
+}
+function assertCurrent(task, execution, planner = false) {
+  if (shuttingDown || findTask(task.id) !== task || executions.get(task) !== execution || execution.controller.signal.aborted || (planner && task.status === 'paused')) throw new Cancelled('任务执行已失效');
+}
+function invalidate(task) {
+  executionFor(task).controller.abort();
+  executions.delete(task);
+  for (const entry of running.values()) if (entry.taskId === task.id) entry.terminate();
+  for (const step of task.plan || []) if (step.status === 'running') {
+    step.status = 'interrupted';
+    stepNode(task, step, { status: 'interrupted', detail: '执行已中止；重试前需人工确认副作用' });
+  }
+  dirty = true;
+}
+
 async function load() {
-  try { state = { ...state, ...JSON.parse(await readFile(STATE_PATH, 'utf8')) }; }
-  catch { /* 首次 */ }
-  state.config = { ...structuredClone(DEFAULT_CONFIG), ...(state.config || {}) };
+  let loaded;
+  try { loaded = JSON.parse(await readFile(STATE_PATH, 'utf8')); }
+  catch (error) { if (error.code === 'ENOENT') return; throw new Error(`无法加载编排器状态: ${error.message}`); }
+  if (!loaded || typeof loaded !== 'object' || Array.isArray(loaded) || !Array.isArray(loaded.tasks) || !Array.isArray(loaded.agents) || !loaded.config || typeof loaded.config !== 'object') throw new Error('编排器状态结构损坏');
+  for (const task of loaded.tasks) {
+    if (!task || typeof task.id !== 'string' || !Array.isArray(task.plan) || (task.tree !== undefined && !Array.isArray(task.tree))) throw new Error('编排器任务状态损坏');
+    if (task.plan.length) validateSteps(task.plan);
+  }
+  state = { ...state, ...loaded };
+  state.config = { ...structuredClone(DEFAULT_CONFIG), ...state.config };
   state.config.planner = { ...DEFAULT_CONFIG.planner, ...(state.config.planner || {}) };
-  state.tasks = state.tasks || [];
-  state.agents = state.agents || [];
 }
-async function save() {
-  if (!dirty) return;
-  dirty = false;
-  try {
-    await mkdir(path.dirname(STATE_PATH), { recursive: true });
-    await writeFile(STATE_PATH, JSON.stringify(state, null, 2));
-  } catch (e) { console.log('[orch] save failed:', e.message); }
+export function flushOrchestrator() {
+  if (saveFlight) return saveFlight;
+  saveFlight = (async () => {
+    while (dirty) {
+      dirty = false;
+      const snapshot = JSON.stringify(state, null, 2);
+      const temporary = `${STATE_PATH}.${process.pid}.${randomUUID()}.tmp`;
+      try {
+        await mkdir(path.dirname(STATE_PATH), { recursive: true });
+        await runtime.writeFile(temporary, snapshot);
+        await runtime.rename(temporary, STATE_PATH);
+      } catch (error) {
+        dirty = true;
+        await unlink(temporary).catch(() => {});
+        throw error;
+      }
+    }
+  })().finally(() => { saveFlight = null; });
+  return saveFlight;
 }
-setInterval(save, 5000).unref();
+const save = flushOrchestrator;
 
 function log(task, level, msg) {
   task.log = task.log || [];
@@ -101,7 +148,7 @@ function classifyFail(text) {
 }
 
 function createPoolAgent(client) {
-  const w = AGENT_WORKERS[client];
+  const w = runtime.workers[client];
   if (!w) return null;
   const n = (state.agents || []).filter((a) => a.client === client).length + 1;
   const ag = { id: `a_${client}_${n}_${Date.now().toString(36)}`, client, label: `${w.label} #${n}`, status: 'idle', createdAt: Date.now(), lastUsed: 0 };
@@ -161,7 +208,8 @@ function ensureStepNode(task, step) {
   if (!n) {
     const plan = planNodeFor(task);
     const parentId = step.parentStep && nodeFind(task, `step_${step.parentStep}`) ? `step_${step.parentStep}` : (plan ? plan.id : null);
-    n = { id, kind: 'step', parentId, label: `${step.id} ${step.title || ''}`.trim(), agent: step.agent, status: 'pending', ts: Date.now() };
+    n = { id, kind: 'step', parentId, label: `${step.id} ${step.title || ''}`.trim(), agent: step.agent, status: 'pending', ts: Date.now(),
+      stepId: step.id, deps: step.deps || [], depth: step.depth || 0, needsDebate: !!step.needsDebate, progress: 0 };
     task.tree.push(n); dirty = true;
   }
   return n;
@@ -172,16 +220,65 @@ function stepNode(task, step, patch) {
   return n;
 }
 
+// ---------- 递归聚合（参考 recursive-learning bucketMastery：父 = 0.7×min + 0.3×avg 短板优先） ----------
+// 在 tree 节点上原地写 progress / gate 字段，由前端渲染进度条与依赖锁
+function aggregateProgress(task) {
+  const nodes = task.tree || [];
+  if (!nodes.length) return;
+  const byId = {}; nodes.forEach((n) => { byId[n.id] = n; });
+  const kids = {}; nodes.forEach((n) => { const p = n.parentId && byId[n.parentId] ? n.parentId : null; (kids[p] = kids[p] || []).push(n); });
+  const plan = task.plan || [];
+  const stepById = {}; plan.forEach((s) => { stepById[s.id] = s; });
+
+  // deps 闸门：只对 step 节点算，跨分支且依赖未 done 时记录 gate
+  for (const n of nodes) {
+    if (n.kind !== 'step' || !n.stepId) continue;
+    const s = stepById[n.stepId];
+    if (!s) continue;
+    const deps = s.deps || [];
+    const pending = deps.filter((d) => {
+      const dn = stepById[d];
+      return !dn || dn.status !== 'done';
+    });
+    if (pending.length && n.status === 'pending') {
+      n.gate = { waitingFor: pending };
+    } else if (n.gate) {
+      delete n.gate;
+    }
+  }
+
+  // 递归聚合 progress：叶子看 status，父节点 0.7min + 0.3avg
+  function leafProgress(n) {
+    if (n.status === 'done') return 100;
+    if (n.status === 'failed') return 0;
+    if (n.status === 'running' || n.status === 'retrying') return Math.max(10, n.progress || 10);
+    return n.progress || 0;
+  }
+  function calc(n) {
+    const ks = kids[n.id] || [];
+    if (!ks.length) { n.progress = leafProgress(n); return n.progress; }
+    let sum = 0, min = 100;
+    for (const k of ks) { const p = calc(k); sum += p; if (p < min) min = p; }
+    const avg = sum / ks.length;
+    n.progress = Math.round(0.7 * min + 0.3 * avg);
+    return n.progress;
+  }
+  (kids[null] || []).forEach(calc);
+  dirty = true;
+}
+
 // 带失败自愈的派发：重试 → 冷却 → 切换备选 client
-async function dispatchWithRecovery(task, step, persona, nodeId) {
-  const primary = step.agent;
-  const candidates = recoveryCandidates(primary);
+async function dispatchWithRecovery(task, step, persona, nodeId, execution, primary = step.agent) {
+  const candidates = [primary];
+  if (state.config.crossClient) for (const client of allowedAgents()) if (client !== primary) { candidates.push(client); break; }
   const maxAttempts = candidates.length > 1 ? 3 : 2;
   let last = { ok: false, error: 'no attempt', code: -1, output: '' };
   let attempt = 0;
   for (const client of candidates) {
     const reps = client === primary ? 2 : 1;
     for (let rep = 0; rep < reps && attempt < maxAttempts; rep++, attempt++) {
+      assertCurrent(task, execution);
+      if (task.status === 'paused' && attempt > 0) return last;
       const ag = pickPoolAgent(client);
       if (!ag) continue;
       ag.status = 'busy'; ag.lastUsed = Date.now(); ag.taskId = task.id; ag.stepId = step.id; dirty = true;
@@ -189,6 +286,9 @@ async function dispatchWithRecovery(task, step, persona, nodeId) {
       nodePatch(task, nodeId, { status: isRetry ? 'retrying' : 'running', agent: client, agentId: ag.id, detail: isRetry ? `第 ${attempt + 1} 次尝试` : undefined, attempt: attempt + 1 });
       if (isRetry) log(task, 'warn', `步骤 ${step.id} 第 ${attempt + 1} 次尝试 → ${ag.label}(${client})`);
       const r = await dispatchStep(task, step, persona, ag);
+      if (execution.controller.signal.aborted) { ag.status = 'idle'; ag.taskId = undefined; ag.stepId = undefined; dirty = true; }
+      assertCurrent(task, execution);
+      if (task.status === 'paused') { ag.status = 'idle'; ag.taskId = undefined; ag.stepId = undefined; dirty = true; return r; }
       if (r.ok) { ag.status = 'idle'; ag.taskId = undefined; ag.stepId = undefined; dirty = true; return r; }
       last = r;
       const cls = classifyFail(r.error || r.output || '');
@@ -204,9 +304,57 @@ async function dispatchWithRecovery(task, step, persona, nodeId) {
 }
 
 // ---------- planner ----------
-async function plannerChat(task, userPrompt) {
+function validateSteps(steps, existing = []) {
+  if (!Array.isArray(steps) || !steps.length || steps.length > 100) throw new Error('计划 steps 必须为 1–100 项数组');
+  const ids = new Set();
+  const normalized = steps.map((step) => {
+    if (!step || typeof step.id !== 'string' || !/^[\w.-]{1,100}$/.test(step.id) || ids.has(step.id)) throw new Error('步骤 id 缺失、无效或重复');
+    ids.add(step.id);
+    if (typeof step.title !== 'string' || !step.title.trim() || typeof step.prompt !== 'string' || !step.prompt.trim()) throw new Error('步骤 title/prompt 必须为非空字符串');
+    if (!Object.hasOwn(runtime.workers, step.agent)) throw new Error(`未知步骤 agent: ${step.agent}`);
+    if (!Array.isArray(step.deps) || step.deps.some((id) => typeof id !== 'string') || new Set(step.deps).size !== step.deps.length) throw new Error('步骤 deps 必须为不重复的 id 数组');
+    if (step.needsDebate !== undefined && typeof step.needsDebate !== 'boolean') throw new Error('needsDebate 必须为布尔值');
+    return { ...step, deps: [...step.deps] };
+  });
+  const graph = new Map(existing.map((step) => [step.id, step]));
+  normalized.forEach((step) => graph.set(step.id, step));
+  const visiting = new Set(), visited = new Set();
+  function visit(id) {
+    if (visiting.has(id)) throw new Error('步骤依赖存在环');
+    if (visited.has(id)) return;
+    visiting.add(id);
+    for (const dep of graph.get(id).deps || []) {
+      if (!graph.has(dep) || dep === id) throw new Error(`步骤 ${id} 存在未知或自身依赖: ${dep}`);
+      visit(dep);
+    }
+    visiting.delete(id); visited.add(id);
+  }
+  for (const id of graph.keys()) visit(id);
+  return normalized;
+}
+function validateReply(reply, task, actions) {
+  if (!reply || typeof reply !== 'object' || Array.isArray(reply) || !actions.includes(reply.action)) throw new Error('planner 返回了不符合当前阶段的 action');
+  if (['decompose', 'repair'].includes(reply.action)) reply.steps = validateSteps(reply.steps, reply.action === 'repair' ? task.plan || [] : []);
+  if (reply.action === 'verify' && (typeof reply.pass !== 'boolean' || typeof reply.feedback !== 'string')) throw new Error('verify 需要布尔 pass 和字符串 feedback');
+  for (const [action, field] of [['done', 'summary'], ['next_goal', 'goal'], ['blocked', 'reason']]) {
+    if (reply.action === action && (typeof reply[field] !== 'string' || !reply[field].trim())) throw new Error(`${action} 需要非空 ${field}`);
+  }
+  return reply;
+}
+function applyRepair(task, reply) {
+  const replacements = new Map(reply.steps.map((step) => [step.id, { ...step, status: 'pending', result: undefined, depth: 0 }]));
+  task.plan = task.plan.map((step) => replacements.get(step.id) || step);
+  for (const step of replacements.values()) if (!task.plan.some((old) => old.id === step.id)) task.plan.push(step);
+  for (const step of replacements.values()) stepNode(task, step, { status: 'pending', detail: undefined });
+  dirty = true;
+}
+async function plannerChat(task, userPrompt, execution, actions) {
+  assertCurrent(task, execution, true);
+  const plannerVersion = execution.plannerVersion;
+  const check = () => { assertCurrent(task, execution, true); if (execution.plannerVersion !== plannerVersion) throw new Cancelled('规划阶段已失效'); };
   const p = state.config.planner;
   const agents = await availableAgents();
+  check();
   const sys = `你是一个任务编排规划器。你管理一个多 Agent 系统，目标是把用户目标拆成可执行的子任务并派发给子 Agent。
 可用子 Agent: ${JSON.stringify(agents.map((a) => ({ id: a.id, available: a.available })))}
 规则:
@@ -227,26 +375,41 @@ async function plannerChat(task, userPrompt) {
     temperature: 0.2,
     messages: [
       { role: 'system', content: sys },
-      { role: 'user', content: `任务目标: ${task.goal}\n\n当前计划:\n${JSON.stringify(task.plan || [], null, 1)}\n\n最近结果:\n${JSON.stringify((task.plan || []).filter((s) => s.result).map((s) => ({ id: s.id, status: s.status, result: String(s.result).slice(0, 1500) })), null, 1)}\n\n工作目录: ${task.workdir}\n\n请输出下一步 JSON。` },
+      { role: 'user', content: `任务目标: ${task.goal}\n\n当前计划:\n${JSON.stringify(task.plan || [], null, 1)}\n\n最近结果:\n${JSON.stringify((task.plan || []).filter((s) => s.result).map((s) => ({ id: s.id, status: s.status, result: String(s.result).slice(0, 1500) })), null, 1)}\n\n工作目录: ${task.workdir}\n\n当前阶段指令:\n${userPrompt}\n\n请输出下一步 JSON。` },
     ],
   };
-  const res = await fetch(`${p.baseUrl}/chat/completions`, {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${p.apiKey}` },
-    body: JSON.stringify(body),
-    signal: AbortSignal.timeout(120000),
-  });
-  if (!res.ok) throw new Error(`planner HTTP ${res.status}`);
-  const j = await res.json();
-  const text = j.choices?.[0]?.message?.content || '';
-  const m = text.match(/\{[\s\S]*\}/);
-  if (!m) throw new Error('planner 返回非 JSON: ' + text.slice(0, 200));
-  return JSON.parse(m[0]);
+  const controller = new AbortController();
+  execution.planners.add(controller);
+  const cancel = () => controller.abort();
+  execution.controller.signal.addEventListener('abort', cancel, { once: true });
+  const timer = setTimeout(cancel, 120000);
+  try {
+    const res = await runtime.fetch(`${p.baseUrl}/chat/completions`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${p.apiKey}` },
+      body: JSON.stringify(body), signal: controller.signal,
+    });
+    check();
+    if (!res.ok) throw new Error(`planner HTTP ${res.status}`);
+    const j = await res.json();
+    check();
+    const text = j.choices?.[0]?.message?.content;
+    if (typeof text !== 'string') throw new Error('planner 响应缺少字符串 content');
+    const raw = text.trim().replace(/^```(?:json)?\s*/i, '').replace(/```\s*$/, '').trim();
+    return validateReply(JSON.parse(raw), task, actions);
+  } catch (error) {
+    check();
+    throw error;
+  } finally {
+    execution.planners.delete(controller);
+    clearTimeout(timer);
+    execution.controller.signal.removeEventListener('abort', cancel);
+  }
 }
 
 async function availableAgents() {
   const out = [];
-  for (const [id, w] of Object.entries(AGENT_WORKERS)) {
+  for (const [id, w] of Object.entries(runtime.workers)) {
     let ok = true;
     if (w.authCheck) { try { ok = await w.authCheck(); } catch { ok = false; } }
     out.push({ id, label: w.label, available: ok, note: w.note, crossOnly: id !== 'hermes' });
@@ -256,7 +419,7 @@ async function availableAgents() {
 
 function allowedAgents() {
   // crossClient=off 时只允许 hermes（本地常驻 worker）
-  return Object.keys(AGENT_WORKERS).filter((id) => state.config.crossClient || id === 'hermes');
+  return Object.keys(runtime.workers).filter((id) => state.config.crossClient || id === 'hermes');
 }
 
 // ---------- dispatch ----------
@@ -271,51 +434,79 @@ function buildPrompt(step, task) {
 
 function dispatchStep(task, step, persona, agent) {
   const client = agent?.client || step.agent;
-  const w = AGENT_WORKERS[client];
+  const w = runtime.workers[client];
   if (!w) return Promise.resolve({ ok: false, error: `未知 agent ${client}` });
   const prompt = persona ? `${persona}\n\n${buildPrompt(step, task)}` : buildPrompt(step, task);
   const args = w.args.map((a) => (a === '{prompt}' ? prompt : a));
   const key = `${task.id}:${step.id}${persona ? ':' + persona.slice(0, 8) : ''}`;
   const agentId = agent?.id || null;
+  const execution = executionFor(task);
+  assertCurrent(task, execution);
   return new Promise((resolve) => {
     let child;
     try {
-      child = spawn(w.cmd, args, { cwd: task.workdir || HOME, env: { ...process.env, PATH: `${HOME}/.npm-global/bin:${process.env.PATH}` } });
+      child = spawn(w.cmd, args, { cwd: task.workdir || HOME, detached: process.platform !== 'win32', env: { ...process.env, PATH: `${HOME}/.npm-global/bin:${process.env.PATH}` } });
     } catch (e) { return resolve({ ok: false, error: e.message }); }
-    let out = '', err = '', done = false;
-    const timer = setTimeout(() => { try { child.kill('SIGKILL'); } catch {} }, state.config.dispatchTimeoutMs);
+    let out = '', err = '', done = false, terminating = false, killTimer;
+    const signalGroup = (signal) => {
+      try { if (process.platform !== 'win32' && child.pid) process.kill(-child.pid, signal); else child.kill(signal); }
+      catch (e) { if (e.code !== 'ESRCH') console.log('[orch] kill failed:', e.message); }
+    };
+    const terminate = () => {
+      if (terminating) return;
+      terminating = true;
+      signalGroup('SIGTERM');
+      killTimer = setTimeout(() => signalGroup('SIGKILL'), runtime.killGraceMs);
+    };
+    const timer = setTimeout(terminate, state.config.dispatchTimeoutMs);
+    const finish = (result) => {
+      if (done) return;
+      done = true; clearTimeout(timer);
+      // 终止后即使父进程先退出，也继续清理可能遗留的同组子进程。
+      if (!terminating) clearTimeout(killTimer);
+      running.delete(key);
+      resolve(result);
+    };
     child.stdout.on('data', (d) => { out += d; if (out.length > 400000) out = out.slice(-400000); });
     child.stderr.on('data', (d) => { err += d; if (err.length > 100000) err = err.slice(-100000); });
-    child.on('error', (e) => { if (!done) { done = true; clearTimeout(timer); resolve({ ok: false, error: e.message }); } });
+    child.on('error', (e) => finish({ ok: false, error: e.message }));
     child.on('close', (code) => {
-      if (done) return; done = true; clearTimeout(timer);
-      running.delete(key);
       const text = (out || '') + (err ? `\n[stderr]\n${err.slice(-3000)}` : '');
-      resolve({ ok: code === 0, code, output: text.slice(-12000) });
+      finish({ ok: code === 0 && !terminating, code, output: text.slice(-12000), error: terminating ? 'worker 已终止或超时' : undefined });
     });
-    running.set(key, { child, taskId: task.id, stepId: step.id, agent: client, agentId, startedAt: Date.now() });
+    running.set(key, { child, terminate, taskId: task.id, stepId: step.id, agent: client, agentId, startedAt: Date.now() });
     log(task, 'info', `dispatch ${step.id} → ${agent?.label || client}${persona ? ' (' + persona + ')' : ''}`);
     dirty = true;
   });
 }
 
 // ---------- engine ----------
-async function tick() {
-  if (!state.config.enabled) return;
-  const active = state.tasks.filter((t) => ['pending', 'planning', 'running', 'verifying'].includes(t.status));
-  for (const task of active) {
-    try { await stepTask(task); } catch (e) { log(task, 'error', 'tick error: ' + e.message); task.status = 'blocked'; goalNode(task, { status: 'blocked', detail: String(e.message).slice(0, 200) }); }
-    await save();
-  }
+export function tick() {
+  if (tickFlight) return tickFlight;
+  tickFlight = (async () => {
+    if (!state.config.enabled || shuttingDown) return;
+    const active = state.tasks.filter((t) => ['pending', 'planning', 'running', 'verifying'].includes(t.status));
+    for (const task of active) {
+      const execution = executionFor(task);
+      try { await stepTask(task, execution); }
+      catch (e) {
+        if (!(e instanceof Cancelled) && findTask(task.id) === task && executions.get(task) === execution) {
+          log(task, 'error', 'tick error: ' + e.message); task.status = 'blocked'; goalNode(task, { status: 'blocked', detail: String(e.message).slice(0, 200) });
+        }
+      }
+      await save().catch((e) => console.log('[orch] save failed:', e.message));
+    }
+  })().finally(() => { tickFlight = null; });
+  return tickFlight;
 }
 
-async function stepTask(task) {
+async function stepTask(task, execution) {
   // 1) 还没有计划 → 让 planner 拆解
   if (!task.plan || !task.plan.length) {
     task.status = 'planning';
     goalNode(task, { status: 'running', detail: '规划中' });
     log(task, 'info', '请求 planner 拆解任务');
-    const d = await plannerChat(task, '请将该目标拆解为子任务 steps(decompose)。若目标简单可只拆 1-2 步。');
+    const d = await plannerChat(task, '请将该目标拆解为子任务 steps(decompose)。若目标简单可只拆 1-2 步。', execution, ['decompose', 'blocked']);
     if (d.action === 'decompose' && Array.isArray(d.steps) && d.steps.length) {
       task.plan = d.steps.map((s, i) => ({
         id: s.id || `s${i + 1}`, title: s.title || `step ${i + 1}`, agent: s.agent || 'hermes',
@@ -366,13 +557,9 @@ async function stepTask(task) {
     if (failed.length && (task.repairs || 0) < state.config.maxRepairs) {
       task.repairs = (task.repairs || 0) + 1;
       log(task, 'warn', `验收前自检: ${failed.length} 步失败, 返工第 ${task.repairs} 轮`);
-      const d = await plannerChat(task, `以下步骤失败: ${failed.map((s) => s.id).join(',')}。请输出 repair 计划补齐或替代方案。`);
+      const d = await plannerChat(task, `以下步骤失败: ${failed.map((s) => s.id).join(',')}。请输出 repair 计划补齐或替代方案。`, execution, ['repair', 'blocked']);
       if (d.action === 'repair' && Array.isArray(d.steps)) {
-        for (const ns of d.steps) {
-          const ex = steps.find((s) => s.id === ns.id);
-          if (ex) Object.assign(ex, { status: 'pending', prompt: ns.prompt || ex.prompt, agent: ns.agent || ex.agent, result: undefined });
-          else steps.push({ id: ns.id || `s${steps.length + 1}`, title: ns.title || '', agent: ns.agent || 'hermes', prompt: ns.prompt || '', deps: ns.deps || [], needsDebate: !!ns.needsDebate, status: 'pending' });
-        }
+        applyRepair(task, d);
         trunkNode(task, 'repair', `返工第 ${task.repairs} 轮`, { detail: `${d.steps.length} 个补救步骤` });
         task.status = 'running';
         return;
@@ -385,7 +572,7 @@ async function stepTask(task) {
     }
     // planner 验收
     const verifyNode = trunkNode(task, 'verify', '验收', {});
-    const v = await plannerChat(task, '所有子任务已完成。请验收整体目标是否达成: verify(pass=true/false, feedback)。若未完全达成请说明差距。若已完全达成也可直接返回 done+summary。');
+    const v = await plannerChat(task, '所有子任务已完成。请验收整体目标是否达成: verify(pass=true/false, feedback)。若未完全达成请说明差距。若已完全达成也可直接返回 done+summary。', execution, ['verify', 'done', 'blocked']);
     const verifyPass = (v.action === 'verify' && v.pass) || v.action === 'done';
     nodePatch(task, verifyNode.id, { status: verifyPass ? 'done' : 'failed', detail: (v.feedback || v.summary || '').slice(0, 300) });
     // planner 可能返回 verify(pass=true) 或直接 done+summary，两者都视为验收通过
@@ -394,13 +581,13 @@ async function stepTask(task) {
       task.summary = v.feedback || v.summary || '';
       goalNode(task, { status: 'done', detail: (task.summary || '').slice(0, 200) });
       log(task, 'info', '验收通过: ' + (v.feedback || '').slice(0, 200));
-      await maybeContinue(task);
+      await maybeContinue(task, execution);
     } else if (v.action === 'verify' && !v.pass && (task.repairs || 0) < state.config.maxRepairs) {
       task.repairs = (task.repairs || 0) + 1;
       log(task, 'warn', '验收未通过: ' + (v.feedback || '').slice(0, 200));
-      const d = await plannerChat(task, `验收反馈: ${v.feedback || '未达标'}。请 repair 给出补齐步骤。`);
+      const d = await plannerChat(task, `验收反馈: ${v.feedback || '未达标'}。请 repair 给出补齐步骤。`, execution, ['repair', 'blocked']);
       if (d.action === 'repair' && Array.isArray(d.steps)) {
-        for (const ns of d.steps) steps.push({ id: ns.id || `s${steps.length + 1}`, title: ns.title || '', agent: ns.agent || 'hermes', prompt: ns.prompt || '', deps: ns.deps || [], needsDebate: !!ns.needsDebate, status: 'pending' });
+        applyRepair(task, d);
         trunkNode(task, 'repair', `返工第 ${task.repairs} 轮`, { detail: `${d.steps.length} 个补救步骤` });
         task.status = 'running';
       } else { task.status = 'awaiting_review'; task.reviewDeadline = Date.now() + REVIEW_TIMEOUT_MS; task.reviewNodeId = trunkNode(task, 'review', '人工裁决', { status: 'awaiting', detail: '验收未通过' }).id; log(task, 'warn', '验收未通过，转人工裁决'); }
@@ -415,7 +602,7 @@ async function stepTask(task) {
 
   // 4) 派发就绪步骤（deps 已 done、status pending、并发未满）
   // pend 与 status='running' 是同一批在途步骤，不能重复计数（否则并发额度减半）
-  const runningCount = steps.filter((s) => s.status === 'running').length;
+  const runningCount = [...pendingDispatch.values()].reduce((count, entries) => count + entries.size, 0);
   const capacity = Math.max(0, state.config.maxConcurrent - runningCount);
   if (capacity <= 0) return;
 
@@ -429,8 +616,11 @@ async function stepTask(task) {
       stepNode(task, step, { status: 'failed', agent: effAgent, detail: step.result });
       continue;
     }
-    const w = AGENT_WORKERS[effAgent];
-    if (w?.authCheck && !(await w.authCheck())) {
+    assertCurrent(task, execution, true);
+    const w = runtime.workers[effAgent];
+    const authenticated = !w?.authCheck || await w.authCheck();
+    assertCurrent(task, execution, true);
+    if (!authenticated) {
       step.status = 'failed';
       step.result = `${w.label} 未登录/不可用: ${w.note || ''}`;
       log(task, 'warn', `步骤 ${step.id} 的 agent ${effAgent} 不可用`);
@@ -448,20 +638,24 @@ async function stepTask(task) {
           const others = allowed.filter((a) => a !== effAgent);
           const clients = [effAgent, others[0] || effAgent];
           const debateRun = async (client, persona) => {
-            const r = await dispatchWithRecovery(task, step, persona, nodeId);
+            const r = await dispatchWithRecovery(task, step, persona, nodeId, execution, client);
             return { client, ok: r.ok, text: r.ok ? r.output : `FAILED(code=${r.code}): ${(r.output || r.error || '').slice(0, 2000)}` };
           };
-          const [r1, r2] = await Promise.all([
-            debateRun(clients[0], '你是正方，请给出支持该子任务目标的充分论证和方案。'),
-            debateRun(clients[1], '你是反方，请指出风险、反对意见和替代方案。'),
-          ]);
+          // 辩论双方依次执行，共享该步骤的一个全局并发名额。
+          const r1 = await debateRun(clients[0], '你是正方，请给出支持该子任务目标的充分论证和方案。');
+          assertCurrent(task, execution);
+          const r2 = task.status === 'paused' ? { client: clients[1], ok: false, text: '暂停前未派发反方；不再自动派发' }
+            : await debateRun(clients[1], '你是反方，请指出风险、反对意见和替代方案。');
           const debateNote = `正方(${r1.client}):\n${r1.text.slice(0, 4000)}\n\n反方(${r2.client}):\n${r2.text.slice(0, 4000)}`;
-          const syn = await plannerChat(task, `步骤 ${step.id} 进行了正反辩论:\n${debateNote}\n\n请综合双方给出最终执行结论(JSON 即可, 作为步骤结果)。`);
+          assertCurrent(task, execution);
+          if (task.status === 'paused') { step.status = 'done'; step.result = debateNote; stepNode(task, step, { status: 'done', detail: '辩论结果已保留' }); return; }
+          const syn = await plannerChat(task, `步骤 ${step.id} 进行了正反辩论:\n${debateNote}\n\n请综合双方给出最终执行结论(done+summary)。`, execution, ['done']);
           step.result = syn && syn.summary ? syn.summary : debateNote.slice(0, 6000);
           step.status = 'done';
           stepNode(task, step, { status: 'done', detail: '辩论完成' });
         } else {
-          const r = await dispatchWithRecovery(task, step, undefined, nodeId);
+          const r = await dispatchWithRecovery(task, step, undefined, nodeId, execution);
+          assertCurrent(task, execution);
           if (r.ok && applySplit(task, step, r.output || '')) {
             stepNode(task, step, { status: 'running', detail: `已递归拆解为子步骤（深度 ${(step.depth || 0) + 1}）` });
           } else {
@@ -471,10 +665,11 @@ async function stepTask(task) {
           }
         }
       } catch (e) {
+        if (e instanceof Cancelled || execution.controller.signal.aborted) return;
         step.status = 'failed'; step.result = 'dispatch exception: ' + e.message;
         stepNode(task, step, { status: 'failed', detail: String(e.message).slice(0, 200) });
       } finally {
-        pend.delete(`${task.id}:${step.id}`); if (pend.size === 0) pendingDispatch.delete(task.id);
+        pend.delete(`${task.id}:${step.id}`); if (pend.size === 0 && pendingDispatch.get(task.id) === pend) pendingDispatch.delete(task.id);
         dirty = true;
       }
     })();
@@ -515,15 +710,15 @@ function applySplit(task, step, output) {
   return true;
 }
 
-async function maybeContinue(task) {
+async function maybeContinue(task, execution) {
   if (!state.config.autoContinue) return;
   const cont = (task.continuation || 0) + 1;
   if (cont > state.config.maxContinuations) { log(task, 'info', '已达自动续步上限'); return; }
   try {
-    const d = await plannerChat(task, '任务已验收完成。请思考: 基于当前成果, 下一步最值得优化/推进的方向是什么? 用 next_goal 给出一个具体的新目标(不要重复已完成工作)。如果认为无需继续, 返回 done。');
+    const d = await plannerChat(task, '任务已验收完成。请思考: 基于当前成果, 下一步最值得优化/推进的方向是什么? 用 next_goal 给出一个具体的新目标(不要重复已完成工作)。如果认为无需继续, 返回 done。', execution, ['next_goal', 'done', 'blocked']);
     if (d.action === 'next_goal' && d.goal) {
       const nt = {
-        id: `t_${Date.now().toString(36)}`, goal: d.goal, parentId: task.id, continuation: cont,
+        id: `t_${randomUUID()}`, goal: d.goal, parentId: task.id, continuation: cont,
         workdir: task.workdir, client: task.client, status: 'pending', plan: [], log: [], tree: [{ id: 'n1', kind: 'goal', label: String(d.goal).slice(0, 80), status: 'pending', ts: Date.now() }], createdAt: Date.now(), updatedAt: Date.now(),
       };
       state.tasks.push(nt);
@@ -531,38 +726,95 @@ async function maybeContinue(task) {
       log(task, 'info', `自动续步 #${cont}: ${d.goal.slice(0, 120)}`);
       log(nt, 'info', `由 ${task.id} 自动续步生成`);
     }
-  } catch (e) { log(task, 'warn', '续步规划失败: ' + e.message); }
+  } catch (e) { if (!(e instanceof Cancelled) && !execution.controller.signal.aborted) log(task, 'warn', '续步规划失败: ' + e.message); }
 }
 
 // ---------- api ----------
-export async function initOrchestrator() {
-  await load();
-  // 重启恢复：上次进程内的在途派发已丢失，把卡在 running 的步骤重置为 pending 重新执行
-  let recovered = 0;
-  for (const t of state.tasks) for (const s of t.plan || []) {
-    if (s.status === 'running') { s.status = 'pending'; s.result = undefined; recovered++; }
+export function initOrchestrator(options = {}) {
+  if (initFlight) return initFlight;
+  if (initialized) return Promise.resolve();
+  runtime.fetch = options.fetch || runtime.fetch;
+  runtime.workers = options.workers || runtime.workers;
+  runtime.killGraceMs = options.killGraceMs ?? runtime.killGraceMs;
+  runtime.writeFile = options.writeFile || writeFile;
+  runtime.rename = options.rename || rename;
+  shuttingDown = false;
+  initFlight = (async () => {
+    await load();
+    // 外部副作用无法保证恰好一次；重启后的在途任务必须由用户确认后再执行。
+    for (const task of state.tasks) {
+      const interrupted = (task.plan || []).filter((step) => step.status === 'running');
+      if (interrupted.length || ['planning', 'verifying', 'running'].includes(task.status)) {
+        interrupted.forEach((step) => { step.status = 'interrupted'; stepNode(task, step, { status: 'interrupted', detail: '服务重启，执行结果未知' }); });
+        task.status = 'awaiting_review'; task.interrupted = true;
+        task.reviewDeadline = undefined;
+        log(task, 'warn', '重启发现未确认的在途执行，需人工确认副作用后重试');
+        goalNode(task, { status: 'awaiting_review', detail: '执行中断，等待人工确认' });
+      }
+    }
+    for (const agent of state.agents) if (agent.status === 'busy') { agent.status = 'idle'; agent.taskId = undefined; agent.stepId = undefined; dirty = true; }
+    await save();
+    initialized = true;
+    if (options.startTimers !== false) {
+      tickTimer = setInterval(() => { tick().catch((e) => console.log('[orch] tick:', e.message)); }, (state.config.tickSeconds || 15) * 1000);
+      saveTimer = setInterval(() => { save().catch((e) => console.log('[orch] save failed:', e.message)); }, 5000);
+      tickTimer.unref(); saveTimer.unref();
+    }
+  })().finally(() => { initFlight = null; });
+  return initFlight;
+}
+export async function shutdownOrchestrator() {
+  shuttingDown = true;
+  clearInterval(tickTimer); clearInterval(saveTimer);
+  tickTimer = null; saveTimer = null;
+  for (const task of state.tasks) {
+    if (executions.has(task)) invalidate(task);
+    if (['planning', 'verifying', 'running'].includes(task.status)) {
+      task.status = 'awaiting_review'; task.interrupted = true; task.reviewDeadline = undefined; dirty = true;
+    }
   }
-  if (recovered) { await save(); console.log(`[orch] recovered ${recovered} stale running steps`); }
-  // 子 Agent 池恢复：进程重启后在途派发已丢失，busy 实例重置为 idle
-  let freed = 0;
-  for (const a of state.agents || []) if (a.status === 'busy') { a.status = 'idle'; freed++; }
-  if (freed) { dirty = true; await save(); console.log(`[orch] freed ${freed} busy agents`); }
-  setInterval(() => { tick().catch((e) => console.log('[orch] tick:', e.message)); }, (state.config.tickSeconds || 15) * 1000).unref();
-  console.log(`[orch] loaded ${state.tasks.length} tasks, enabled=${state.config.enabled}`);
+  await Promise.allSettled([tickFlight, ...[...pendingDispatch.values()].flatMap((entries) => [...entries.values()])]);
+  await save();
+  initialized = false;
 }
 
-export function orchConfig() { return state.config; }
+function publicConfig() { return { ...state.config, planner: { ...state.config.planner, apiKey: state.config.planner.apiKey ? '***' : '' } }; }
+function configPatch(body) {
+  if (!body || typeof body !== 'object' || Array.isArray(body)) throw new Error('配置必须为对象');
+  const next = structuredClone(state.config);
+  for (const key of ['enabled', 'crossClient', 'autoContinue']) if (Object.hasOwn(body, key)) {
+    if (typeof body[key] !== 'boolean') throw new Error(`${key} 必须为布尔值`);
+    next[key] = body[key];
+  }
+  for (const [key, min, max] of [['maxConcurrent', 1, 32], ['tickSeconds', 1, 3600], ['dispatchTimeoutMs', 1, 86400000], ['maxRepairs', 0, 100], ['maxDepth', 0, 10], ['maxContinuations', 0, 100]]) if (Object.hasOwn(body, key)) {
+    if (!Number.isInteger(body[key]) || body[key] < min || body[key] > max) throw new Error(`${key} 超出允许范围`);
+    next[key] = body[key];
+  }
+  if (Object.hasOwn(body, 'planner')) {
+    if (!body.planner || typeof body.planner !== 'object' || Array.isArray(body.planner)) throw new Error('planner 必须为对象');
+    for (const key of ['baseUrl', 'apiKey', 'model']) if (Object.hasOwn(body.planner, key)) {
+      if (typeof body.planner[key] !== 'string') throw new Error(`planner.${key} 必须为字符串`);
+      if (key !== 'apiKey' || body.planner[key] !== '***') next.planner[key] = body.planner[key];
+    }
+    const url = new URL(next.planner.baseUrl);
+    if (!['http:', 'https:'].includes(url.protocol) || url.username || url.password) throw new Error('planner baseUrl 必须为 HTTP(S) 地址');
+    next.planner.baseUrl = url.toString().replace(/\/$/, '');
+    if (!next.planner.model.trim()) throw new Error('planner model 不能为空');
+  }
+  return next;
+}
+export function orchConfig() { return publicConfig(); }
 
 const REVIEW_TIMEOUT_MS = 24 * 3600 * 1000; // 人工裁决超时
 
 export async function handleOrchestratorApi(url, method, body) {
+  if (!initialized) throw new Error('编排器尚未初始化');
   const p = url.pathname;
-  if (p === '/api/orchestrator/config' && method === 'GET') return { config: state.config, agents: await availableAgents() };
+  if (p === '/api/orchestrator/config' && method === 'GET') return { config: publicConfig(), agents: await availableAgents() };
   if (p === '/api/orchestrator/config' && method === 'PUT') {
-    state.config = { ...state.config, ...(body || {}) };
-    state.config.planner = { ...DEFAULT_CONFIG.planner, ...(body?.planner || {}) };
+    try { state.config = configPatch(body); } catch (error) { return { error: error.message }; }
     dirty = true; await save();
-    return { ok: true, config: state.config };
+    return { ok: true, config: publicConfig() };
   }
   if (p === '/api/orchestrator/tasks' && method === 'GET') {
     const nowTs = Date.now();
@@ -574,8 +826,10 @@ export async function handleOrchestratorApi(url, method, body) {
   }
   if (p === '/api/orchestrator/tasks' && method === 'POST') {
     const { goal, workdir, client } = body || {};
-    if (!goal) return { error: '缺少 goal' };
-    const id = `t_${Date.now().toString(36)}`;
+    if (typeof goal !== 'string' || !goal.trim()) return { error: '缺少有效 goal' };
+    if (workdir !== undefined && (typeof workdir !== 'string' || !path.isAbsolute(workdir))) return { error: 'workdir 必须为绝对路径' };
+    if (client !== undefined && !Object.hasOwn(runtime.workers, client)) return { error: '未知 client' };
+    const id = `t_${randomUUID()}`;
     const wd = workdir || path.join(WORK_ROOT, id);
     await mkdir(wd, { recursive: true });
     const t = { id, goal, workdir: wd, client: client || undefined, status: 'pending', plan: [], log: [], tree: [{ id: 'n1', kind: 'goal', label: String(goal).slice(0, 80), status: 'pending', ts: Date.now() }], createdAt: Date.now(), updatedAt: Date.now() };
@@ -587,8 +841,8 @@ export async function handleOrchestratorApi(url, method, body) {
   }
   if (p === '/api/orchestrator/agent-pool' && method === 'POST') {
     const { client, label } = body || {};
-    if (!AGENT_WORKERS[client]) return { error: `未知 client: ${client}` };
-    const ag = { id: `a_${client}_${Date.now().toString(36)}${Math.floor(Math.random() * 46656).toString(36)}`, client, label: String(label || AGENT_WORKERS[client].label).slice(0, 40), status: 'idle', createdAt: Date.now(), lastUsed: 0 };
+    if (!runtime.workers[client]) return { error: `未知 client: ${client}` };
+    const ag = { id: `a_${client}_${Date.now().toString(36)}${Math.floor(Math.random() * 46656).toString(36)}`, client, label: String(label || runtime.workers[client].label).slice(0, 40), status: 'idle', createdAt: Date.now(), lastUsed: 0 };
     state.agents = state.agents || []; state.agents.push(ag); dirty = true; await save();
     return { ok: true, agent: ag };
   }
@@ -602,20 +856,34 @@ export async function handleOrchestratorApi(url, method, body) {
     const t = findTask(m[1]);
     if (!t) return { error: 'task not found' };
     const action = m[3];
-    if (method === 'GET' && !action) return { task: t };
-    if (method === 'POST' && action === 'pause') { t.status = 'paused'; dirty = true; }
-    if (method === 'POST' && action === 'resume') { if (['paused', 'blocked', 'failed'].includes(t.status)) { t.status = 'pending'; t.error = undefined; } dirty = true; }
-    if (method === 'POST' && action === 'stop') { t.status = 'failed'; log(t, 'warn', '手动停止'); dirty = true; }
+    if (method === 'GET' && !action) { aggregateProgress(t); return { task: t }; }
+    if (method === 'POST' && action === 'pause') {
+      if (!['done', 'failed', 'awaiting_review'].includes(t.status)) {
+        t.status = 'paused'; const execution = executionFor(t); execution.plannerVersion++;
+        for (const controller of execution.planners) controller.abort();
+        dirty = true;
+      }
+    }
+    if (method === 'POST' && action === 'resume') {
+      if (t.interrupted || (t.plan || []).some((step) => step.status === 'interrupted')) return { error: '执行结果未知，请人工 review/retry 确认后再执行' };
+      if (['paused', 'blocked', 'failed'].includes(t.status)) { t.status = 'pending'; t.error = undefined; dirty = true; }
+    }
+    if (method === 'POST' && action === 'stop') { invalidate(t); t.status = 'failed'; log(t, 'warn', '手动停止'); goalNode(t, { status: 'failed', detail: '手动停止' }); }
     if (method === 'POST' && action === 'review') {
       const act = (body || {}).action;
-      if (act === 'pass') { t.status = 'done'; t.summary = (t.summary || '') + '（人工裁决通过）'; log(t, 'info', '人工裁决: 通过'); goalNode(t, { status: 'done', detail: '人工裁决通过' }); }
-      else if (act === 'retry') { t.status = 'pending'; t.repairs = 0; t.error = undefined; log(t, 'info', '人工裁决: 再返工'); }
-      else if (act === 'abort') { t.status = 'failed'; log(t, 'warn', '人工裁决: 终止'); goalNode(t, { status: 'failed', detail: '人工裁决终止' }); }
+      if (act === 'pass') { invalidate(t); t.status = 'done'; t.interrupted = false; t.summary = (t.summary || '') + '（人工裁决通过）'; log(t, 'info', '人工裁决: 通过'); goalNode(t, { status: 'done', detail: '人工裁决通过' }); }
+      else if (act === 'retry') {
+        invalidate(t); t.interrupted = false; t.repairs = 0; t.error = undefined;
+        for (const step of t.plan || []) if (step.status === 'interrupted' || step.status === 'running') { step.status = 'pending'; step.result = undefined; stepNode(t, step, { status: 'pending', detail: '已人工确认可重试' }); }
+        for (const n of t.tree || []) if (['running', 'interrupted', 'awaiting'].includes(n.status)) nodePatch(t, n.id, { status: 'pending', detail: undefined });
+        t.status = 'pending'; log(t, 'info', '人工裁决: 确认副作用后重试');
+      }
+      else if (act === 'abort') { invalidate(t); t.interrupted = false; t.status = 'failed'; log(t, 'warn', '人工裁决: 终止'); goalNode(t, { status: 'failed', detail: '人工裁决终止' }); }
       else return { error: 'action 需为 pass/retry/abort' };
       if (t.reviewNodeId) nodePatch(t, t.reviewNodeId, { status: 'done', detail: `人工裁决: ${act}` });
       dirty = true;
     }
-    if (method === 'DELETE' && !action) { state.tasks = state.tasks.filter((x) => x.id !== t.id); dirty = true; }
+    if (method === 'DELETE' && !action) { invalidate(t); state.tasks = state.tasks.filter((x) => x.id !== t.id); dirty = true; }
     await save();
     return { ok: true, task: t };
   }

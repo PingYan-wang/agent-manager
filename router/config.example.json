@@ -1,38 +1,95 @@
 {
+  "version": 2,
   "port": 8788,
   "ollamaUrl": "http://127.0.0.1:11434",
   "classifierModel": "qwen2.5:3b-instruct",
   "upstreamTimeoutMs": 600000,
+  "providers": {
+    "volc": {
+      "baseUrl": "https://ark.cn-beijing.volces.com/api/v3",
+      "apiKey": "sk-your-volcengine-key",
+      "label": "火山方舟",
+      "cost": 1.2
+    },
+    "reverix": {
+      "baseUrl": "https://reverix.ai/v1",
+      "apiKey": "sk-your-reverix-key",
+      "label": "Reverix",
+      "cost": 15
+    },
+    "local": {
+      "baseUrl": "http://127.0.0.1:11434/v1",
+      "apiKey": "ollama",
+      "label": "本地 Ollama（仅纯聊天）",
+      "capabilities": {
+        "tools": false,
+        "stream": true,
+        "maxChars": 6000,
+        "maxMessages": 12,
+        "tiers": ["simple"]
+      }
+    }
+  },
+  "routes": {
+    "simple": {
+      "strategy": "priority",
+      "chain": [
+        { "provider": "volc", "models": ["deepseek-v4.1-flash"] }
+      ]
+    },
+    "coding": {
+      "strategy": "priority",
+      "chain": [
+        { "provider": "volc", "models": ["kimi-k3.1-pro", "doubao-seed-2.1-pro"] },
+        { "provider": "reverix", "models": ["claude-opus-5-5", "gpt-6.1-sol"] }
+      ]
+    },
+    "complex": {
+      "strategy": "latency",
+      "chain": [
+        { "provider": "reverix", "models": ["claude-opus-5-5", "gpt-6.1-sol"] },
+        { "provider": "volc", "models": ["glm-5.3"] }
+      ]
+    },
+    "expert": {
+      "strategy": "priority",
+      "chain": [
+        { "provider": "reverix", "models": ["claude-fable-5-2", "claude-opus-5-5"] },
+        { "provider": "volc", "models": ["glm-5.3"] }
+      ]
+    }
+  },
+  "reserve": [
+    { "provider": "reverix", "models": ["gpt-6.1-sol"] },
+    { "provider": "volc", "models": ["glm-5.3"] },
+    { "provider": "local", "models": ["qwen2.5:3b-instruct"] }
+  ],
+  "guard": {
+    "upgradeOnTools": true,
+    "toolsMin": 1,
+    "toolsUpgradeTo": "coding",
+    "fastFailStaleMs": 45000,
+    "fastFailAfterRetries": 2,
+    "fastFailMinWaitMs": 120000
+  },
+  "retryPolicy": {
+    "windowMs": 300000,
+    "escalateAfter": 2,
+    "crossTier": true,
+    "tiers": ["simple", "coding", "complex", "expert"]
+  },
+  "breaker": {
+    "quotaMs": 900000,
+    "authMs": 3600000,
+    "rateMs": 60000,
+    "serverMs": 60000,
+    "networkMs": 30000,
+    "modelMs": 600000
+  },
   "classifier": {
     "mode": "cloud",
     "route": "simple",
     "model": ""
-  },
-  "routes": {
-    "simple": {
-      "baseUrl": "https://ark.cn-beijing.volces.com/api/plan/v3",
-      "apiKey": "sk-your-volcengine-plan-key",
-      "model": "deepseek-v4.1-flash",
-      "fallbacks": []
-    },
-    "coding": {
-      "baseUrl": "https://ark.cn-beijing.volces.com/api/plan/v3",
-      "apiKey": "sk-your-volcengine-plan-key",
-      "model": "kimi-k3.1-pro",
-      "fallbacks": []
-    },
-    "complex": {
-      "baseUrl": "https://reverix.ai/v1",
-      "apiKey": "sk-your-reverix-key",
-      "model": "claude-opus-5-5",
-      "fallbacks": []
-    },
-    "expert": {
-      "baseUrl": "https://reverix.ai/v1",
-      "apiKey": "sk-your-reverix-key",
-      "model": "claude-fable-5-2",
-      "fallbacks": []
-    }
   },
   "budgets": {
     "reverix.ai": { "usd": 20 }

@@ -11,9 +11,12 @@ import { initOrchestrator, handleOrchestratorApi } from './orchestrator.js';
 import { config, HOME, DATA_DIR } from './config.js';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { randomBytes } from 'node:crypto';
+import { containedPath, proxyRequestAllowed, readJsonBody, redactSecrets, requestAllowed } from './src/http/boundaries.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const PORT = config.port;
+const WRITE_TOKEN = config.writeToken || randomBytes(32).toString('hex');
 const HUB_URL = config.hubUrl;
 const HUB_KEY = config.hubKey;
 const ASM = config.asmBin;
@@ -25,19 +28,7 @@ const json = (res, code, obj) => {
   res.end(JSON.stringify(obj));
 };
 
-const readBody = (req) =>
-  new Promise((resolve, reject) => {
-    let data = '';
-    req.on('data', (c) => (data += c));
-    req.on('end', () => {
-      try {
-        resolve(data ? JSON.parse(data) : {});
-      } catch {
-        reject(new Error('Invalid JSON body'));
-      }
-    });
-    req.on('error', reject);
-  });
+const readBody = readJsonBody;
 
 async function hubFetch(method, apiPath, body) {
   const res = await fetch(`${HUB_URL}/api${apiPath}`, {
@@ -47,6 +38,7 @@ async function hubFetch(method, apiPath, body) {
       'Content-Type': 'application/json',
     },
     body: body === undefined ? undefined : JSON.stringify(body),
+    signal: AbortSignal.timeout(90000), // MCPHub reload 等操作可能等待 stdio 重连，给足时间但不再无限挂起
   });
   const text = await res.text();
   let data;
@@ -152,6 +144,43 @@ async function findSkillDirs(root, maxDepth = 5) {
   return out;
 }
 
+// github tarball 走 codeload，在部分网络下只有 ~20KB/s；镜像优先 + 慢流熔断换下一个源
+const GH_TARBALL_MIRRORS = ['https://gh-proxy.com/'];
+async function downloadTarball(url, timeoutMs = 180000) {
+  const candidates = [...GH_TARBALL_MIRRORS.map((m) => m + url), url];
+  let lastErr = null;
+  for (const u of candidates) {
+    const ctrl = new AbortController();
+    const timer = setTimeout(() => ctrl.abort(), timeoutMs);
+    try {
+      const res = await fetch(u, { headers: GH_HEADERS, signal: ctrl.signal, redirect: 'follow' });
+      if (!res.ok || !res.body) { lastErr = new Error(`HTTP ${res.status}`); continue; }
+      const reader = res.body.getReader();
+      const chunks = [];
+      let got = 0, lastByte = Date.now(), t0 = lastByte;
+      for (;;) {
+        const { done, value } = await reader.read();
+        if (done) break;
+        chunks.push(value); got += value.length; lastByte = Date.now();
+        const elapsed = Date.now() - t0;
+        // 12s 内不足 256KB 或 15s 无新数据 → 视为此源不可用，换下一个
+        if ((elapsed > 12000 && got < 256 * 1024) || Date.now() - lastByte > 15000) {
+          await reader.cancel().catch(() => {});
+          throw new Error('下载过慢或停滞');
+        }
+      }
+      const buf = Buffer.concat(chunks.map((c) => Buffer.from(c)));
+      if (got < 1024) throw new Error('文件过小，可能是错误页');
+      return buf;
+    } catch (e) {
+      lastErr = e;
+    } finally {
+      clearTimeout(timer);
+    }
+  }
+  throw lastErr || new Error('tarball 下载失败');
+}
+
 // github.com 的 git/https 端点在部分网络下不可达（api.github.com 与 codeload 正常），
 // asm 内部 git clone 会 60s 超时。此时改走 tarball 直装：下载压缩包 → 解压 →
 // 复制 SKILL.md 目录到 ~/.agents/skills（asm global scope），再由 syncAllSkills 铺到所有 Agent。
@@ -164,11 +193,13 @@ async function installGithubSkillDirect(source) {
   const tmp = await mkdtemp(path.join(tmpdir(), 'ghskill-'));
   try {
     const tarPath = path.join(tmp, 'repo.tar.gz');
-    const dl = await fetch(`https://api.github.com/repos/${owner}/${repo}/tarball/${encodeURIComponent(info.branch)}`, {
-      headers: GH_HEADERS, signal: AbortSignal.timeout(180000), redirect: 'follow',
-    });
-    if (!dl.ok) return { error: `tarball 下载失败 HTTP ${dl.status}` };
-    await writeFile(tarPath, Buffer.from(await dl.arrayBuffer()));
+    let tarBuf;
+    try {
+      tarBuf = await downloadTarball(`https://api.github.com/repos/${owner}/${repo}/tarball/${encodeURIComponent(info.branch)}`);
+    } catch (e) {
+      return { error: `tarball 下载失败: ${e.message}` };
+    }
+    await writeFile(tarPath, tarBuf);
     await new Promise((res, rej) => execFile('tar', ['-xzf', tarPath, '-C', tmp], (e) => (e ? rej(e) : res())));
     const top = (await readdir(tmp)).find((d) => d !== 'repo.tar.gz');
     if (!top) return { error: 'tarball 解压为空' };
@@ -870,23 +901,39 @@ const ROUTER_CFG = path.join(ROUTER_DIR, 'config.json');
 const APPLY_FILE = path.join(DATA_DIR, 'router-agent-apply.json');
 const OLLAMA_BIN = '/opt/homebrew/bin/ollama';
 const LOCAL_PULLS = new Map(); // model -> {status, log}
+const MODEL_CACHE = new Map(); // provider -> {ts, data:{models,source,error}}
 
 const readRouterConfig = async () => { try { return JSON.parse(await readFile(ROUTER_CFG, 'utf8')); } catch { return null; } };
 
 function maskConfig(cfg) {
   const out = JSON.parse(JSON.stringify(cfg));
   for (const r of Object.values(out.routes || {})) {
-    r.apiKey = '***';
-    for (const f of r.fallbacks || []) f.apiKey = '***';
+    for (const group of r.chain || []) if (group.apiKey) group.apiKey = '***';
+    if (r && r.apiKey) r.apiKey = '***';
+    for (const f of r.fallbacks || []) if (f.apiKey) f.apiKey = '***';
+    for (const g of r.chain || []) if (g && g.apiKey) g.apiKey = '***';
   }
   if (out.classifier && out.classifier.apiKey) out.classifier.apiKey = '***';
   for (const p of Object.values(out.providers || {})) if (p.apiKey) p.apiKey = '***';
-  return out;
+  for (const g of out.reserve || []) if (g && g.apiKey) g.apiKey = '***';
+  return redactSecrets(out);
 }
 
 function mergeConfigKeys(incoming, old) {
   for (const [name, r] of Object.entries(incoming.routes || {})) {
     const o = (old.routes || {})[name] || {};
+    // 新版链路：密钥都在 providers 里，路由本身不含 key
+    if (Array.isArray(r.chain) && r.chain.length) {
+      for (const g of r.chain) {
+        if (!g || g.provider) continue;
+        const og = (o.chain || []).find((x) => x && !x.provider && x.baseUrl === g.baseUrl);
+        g.apiKey = (!g.apiKey || g.apiKey === '***') ? (og && og.apiKey) || '' : g.apiKey;
+      }
+      delete r.apiKey;
+      delete r.fallbacks;
+      continue;
+    }
+    if (!r.baseUrl && !r.apiKey && !(o.apiKey)) continue;
     r.apiKey = (!r.apiKey || r.apiKey === '***') ? o.apiKey : r.apiKey;
     (r.fallbacks || []).forEach((f, i) => { f.apiKey = (!f.apiKey || f.apiKey === '***') ? ((o.fallbacks || [])[i] || {}).apiKey : f.apiKey; });
   }
@@ -894,6 +941,11 @@ function mergeConfigKeys(incoming, old) {
   for (const [n, p] of Object.entries(incoming.providers || {})) {
     const o = (old.providers || {})[n];
     if (o) p.apiKey = (!p.apiKey || p.apiKey === '***') ? o.apiKey : p.apiKey;
+  }
+  for (const g of incoming.reserve || []) {
+    if (!g || g.provider) continue;
+    const og = (old.reserve || []).find((x) => x && !x.provider && x.baseUrl === g.baseUrl);
+    g.apiKey = (!g.apiKey || g.apiKey === '***') ? (og && og.apiKey) || '' : g.apiKey;
   }
   return incoming;
 }
@@ -929,15 +981,67 @@ const routerMgmtRoutes = [
   ['PUT', /^\/api\/router\/config$/, async (req, res, body) => {
     let incoming = body;
     if (!incoming || typeof incoming.routes !== 'object' || !Object.keys(incoming.routes).length) return json(res, 400, { error: 'routes 不能为空' });
+    const STRATEGIES = ['priority', 'latency', 'cost', 'healthy'];
     for (const [n, r] of Object.entries(incoming.routes)) {
-      if (!r || typeof r.model !== 'string' || !r.model.trim()) return json(res, 400, { error: `路由 ${n} 缺少 model` });
-      r.fallbacks = Array.isArray(r.fallbacks) ? r.fallbacks.filter(f => f && f.model) : [];
+      if (!r || typeof r !== 'object') return json(res, 400, { error: `路由 ${n} 为空` });
+      // 策略跟路由一起存：不认识的值直接拒绝，避免线上静默退回 priority
+      if (r.strategy != null && !STRATEGIES.includes(r.strategy)) return json(res, 400, { error: `路由 ${n} 的策略 ${r.strategy} 不支持（${STRATEGIES.join(' / ')}）` });
+      if (Array.isArray(r.chain)) {
+        r.chain = r.chain
+          .filter((g) => g && (g.provider || g.baseUrl) && Array.isArray(g.models))
+          .map((g) => ({ ...g, models: g.models.map((m) => String(m).trim()).filter(Boolean) }))
+          .filter((g) => g.models.length);
+        if (!r.chain.length) return json(res, 400, { error: `路由 ${n} 的链路为空（至少一个厂商 + 模型）` });
+        for (const g of r.chain) {
+          if (g.provider && !(incoming.providers || {})[g.provider]) return json(res, 400, { error: `路由 ${n} 引用了不存在的厂商 ${g.provider}` });
+          if (!g.provider && !g.baseUrl) return json(res, 400, { error: `路由 ${n} 的直连分组缺少 baseUrl` });
+        }
+        delete r.model; delete r.baseUrl; delete r.apiKey; delete r.fallbacks;
+      } else if (typeof r.model === 'string' && r.model.trim()) {
+        r.fallbacks = Array.isArray(r.fallbacks) ? r.fallbacks.filter((f) => f && f.model) : [];
+      } else {
+        return json(res, 400, { error: `路由 ${n} 缺少 model 或 chain` });
+      }
+    }
+    if (incoming.reserve !== undefined) {
+      incoming.reserve = Array.isArray(incoming.reserve)
+        ? incoming.reserve.filter((g) => g && g.provider && (incoming.providers || {})[g.provider] && Array.isArray(g.models) && g.models.length)
+          .map((g) => ({ provider: g.provider, models: g.models.map((m) => String(m).trim()).filter(Boolean) }))
+        : [];
+    }
+    // 厂商字段收敛：成本 / 能力声明只留认识的键，避免脏数据把路由弄挂
+    for (const [id, p] of Object.entries(incoming.providers || {})) {
+      if (!p || typeof p !== 'object') { delete incoming.providers[id]; continue; }
+      if (p.cost != null) { const c = Number(p.cost); if (c > 0) p.cost = c; else delete p.cost; }
+      if (p.capabilities != null) {
+        const c = p.capabilities;
+        if (!c || typeof c !== 'object') { delete p.capabilities; }
+        else {
+          const cap = {};
+          if (c.tools === false) cap.tools = false;
+          if (c.stream === false) cap.stream = false;
+          for (const k of ['maxChars', 'maxMessages']) { const v = Number(c[k]); if (v > 0) cap[k] = v; }
+          if (Array.isArray(c.tiers)) {
+            const t = [...new Set(c.tiers.filter((x) => x === 'simple' || incoming.routes[x]))];
+            if (t.length) cap.tiers = t;
+          }
+          if (Object.keys(cap).length) p.capabilities = cap; else delete p.capabilities;
+        }
+      }
+    }
+    if (incoming.guard && typeof incoming.guard === 'object') {
+      for (const k of ['fastFailAfterRetries', 'fastFailStaleMs', 'fastFailMinWaitMs', 'toolsMin']) {
+        if (incoming.guard[k] == null) continue;
+        const v = Number(incoming.guard[k]);
+        if (Number.isFinite(v) && v >= 0) incoming.guard[k] = v; else delete incoming.guard[k];
+      }
     }
     const old = (await readRouterConfig()) || {};
     incoming = mergeConfigKeys(incoming, old);
     await mkdir(ROUTER_DIR, { recursive: true });
     await writeFile(ROUTER_CFG + '.bak-' + Date.now(), JSON.stringify(old, null, 2));
     await writeFile(ROUTER_CFG, JSON.stringify(incoming, null, 2));
+    MODEL_CACHE.clear(); // 厂商地址/密钥变了，模型清单缓存作废
     let reloaded = await reloadRouter();
     if (!reloaded) { try { execFile('/bin/launchctl', ['kickstart', '-k', 'gui/501/ai.hermes.router']); } catch {} }
     return json(res, 200, { ok: true, reloaded });
@@ -951,6 +1055,52 @@ const routerMgmtRoutes = [
     const cc = c.classifier || {}; add(cc.baseUrl, cc.apiKey);
     const providers = await Promise.all([...seen.entries()].slice(0, 8).map(([u, k]) => probeModels(u, k)));
     return json(res, 200, { providers });
+  }],
+  ['GET', /^\/api\/router\/models$/, async (req, res) => {
+    // 链路编辑器用：拉厂商真实模型清单（/v1/models），失败则退回配置里出现过的模型名
+    const u = new URL(req.url, 'http://127.0.0.1');
+    const pid = String(u.searchParams.get('provider') || '').trim();
+    const force = u.searchParams.get('refresh') === '1';
+    const c = await readRouterConfig();
+    if (!c) return json(res, 500, { error: 'router config not found' });
+    const provs = c.providers || {};
+    const knownFromCfg = (id) => {
+      const set = new Set();
+      for (const r of Object.values(c.routes || {})) for (const g of r.chain || []) if (g && g.provider === id) for (const m of g.models || []) set.add(m);
+      for (const g of c.reserve || []) if (g && g.provider === id) for (const m of g.models || []) set.add(m);
+      return set;
+    };
+    // 上游不提供 /models 时（如火山 plan 端点），用「配置里出现过的 + 日志里真实跑过的」模型兜底
+    const observed = async (id) => {
+      const set = knownFromCfg(id);
+      try {
+        const txt = await readFile(path.join(ROUTER_DIR, 'router.log'), 'utf8');
+        const tail = txt.length > 2_000_000 ? txt.slice(-2_000_000) : txt;
+        for (const line of tail.split('\n')) {
+          const m = line.match(/route=\S+ model=(\S+)[^\n]*?provider=([A-Za-z0-9._-]+)/);
+          if (m && m[2] === id) set.add(m[1]);
+        }
+      } catch { /* 无日志就只用配置里的 */ }
+      return [...set];
+    };
+    const probe = async (id, p) => {
+      const hit = MODEL_CACHE.get(id);
+      if (!force && hit && Date.now() - hit.ts < 600000) return { ...hit.data, cached: true };
+      const r = await probeModels(p.baseUrl, p.apiKey);
+      const data = r.models.length
+        ? { models: r.models, source: 'upstream', error: '' }
+        : { models: await observed(id), source: 'history', error: r.error || 'no models endpoint' };
+      MODEL_CACHE.set(id, { ts: Date.now(), data });
+      return data;
+    };
+    if (pid) {
+      const p = provs[pid];
+      if (!p) return json(res, 404, { error: `未知厂商 ${pid}` });
+      return json(res, 200, { provider: pid, baseUrl: p.baseUrl, ...(await probe(pid, p)) });
+    }
+    const out = {};
+    await Promise.all(Object.entries(provs).map(async ([id, p]) => { out[id] = { baseUrl: p.baseUrl, ...(await probe(id, p)) }; }));
+    return json(res, 200, { providers: out });
   }],
   ['GET', /^\/api\/router\/local-models$/, async (req, res) => {
     const pulls = {};
@@ -1245,6 +1395,10 @@ const routes = [...routerMgmtRoutes,
     const p = String(prefix).trim();
     if (!p.startsWith('/px/')) return json(res, 400, { error: '前缀必须以 /px/ 开头' });
     const tgt = String(target).trim().replace(/\/$/, '');
+    try {
+      const targetUrl = new URL(tgt);
+      if (!['http:', 'https:'].includes(targetUrl.protocol) || targetUrl.username || targetUrl.password) throw new Error('invalid target');
+    } catch { return json(res, 400, { error: '代理目标必须为不含登录信息的 HTTP(S) 地址' }); }
     const entryId = id || `${String(name).toLowerCase().replace(/[^\w-]/g, '-').replace(/^-+|-+$/g, '') || 'svc'}-${Date.now().toString(36)}`;
     const ex = proxyEntries.find((e) => e.id === entryId || e.prefix === p);
     if (m[1] === 'add' && ex) return json(res, 400, { error: `已存在: ${ex.id}` });
@@ -1377,11 +1531,22 @@ const routes = [...routerMgmtRoutes,
       fetch(`${cfg.ollamaUrl || 'http://127.0.0.1:11434'}/api/tags`, { signal: AbortSignal.timeout(2500) }).then((r) => r.ok).catch(() => false),
     ]);
     const routes = {};
+    const provs = cfg.providers || {};
+    const hostFor = (pid) => { try { return new URL((provs[pid] || {}).baseUrl || '').host; } catch { return ''; } };
     for (const [name, r] of Object.entries(cfg.routes || {})) {
-      const host = (() => { try { return new URL(r.baseUrl).host; } catch { return r.baseUrl || ''; } })();
-      routes[name] = { model: r.model, fallbacks: (r.fallbacks || []).map((f) => f.model), host };
+      const chain = Array.isArray(r.chain) && r.chain.length
+        ? r.chain.map((g) => ({ provider: g.provider || '', models: (g.models || []).map(String), host: hostFor(g.provider) }))
+        : [{ provider: r.provider || '', models: [r.model, ...(r.fallbacks || []).map((f) => f.model)].filter(Boolean), host: (() => { try { return new URL(r.baseUrl || '').host; } catch { return ''; } })() }];
+      const first = chain[0] || { provider: '', models: [], host: '' };
+      routes[name] = {
+        model: first.models[0] || '',
+        fallbacks: chain.flatMap((g, i) => (i === 0 ? g.models.slice(1) : g.models)),
+        host: first.host,
+        chain,
+      };
     }
-    json(res, 200, { routerOk, ollamaOk, classifier: cfg.classifierModel || '', routes });
+    const cc = cfg.classifier || {};
+    json(res, 200, { routerOk, ollamaOk, classifier: cfg.classifierModel || cc.model || cc.mode || '', classifierMode: cc.mode || '', routes });
   }],
   ['GET', /^\/api\/router\/stats$/, async (req, res) => {
     const dir = process.env.ROUTER_DIR || `${HOME}/.hermes/router`;
@@ -1462,6 +1627,28 @@ const routes = [...routerMgmtRoutes,
     execFile('launchctl', ['kickstart', '-k', `gui/${process.getuid()}/ai.hermes.router`], { timeout: 10000 }, (e) => {
       json(res, e ? 500 : 200, e ? { ok: false, error: String(e.message || e) } : { ok: true });
     });
+  }],
+  ['GET', /^\/api\/router\/health$/, async (req, res) => {
+    try {
+      const r = await fetch('http://127.0.0.1:8788/admin/health', { signal: AbortSignal.timeout(4000) });
+      return json(res, 200, await r.json());
+    } catch (e) {
+      return json(res, 200, { ok: false, error: String((e && e.message) || e), providers: [], routes: {} });
+    }
+  }],
+  ['POST', /^\/api\/router\/breaker\/reset$/, async (req, res, body) => {
+    const provider = String((body || {}).provider || '');
+    try {
+      const r = await fetch('http://127.0.0.1:8788/admin/breaker/reset', {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify(provider ? { provider } : {}),
+        signal: AbortSignal.timeout(4000),
+      });
+      return json(res, r.status, await r.json());
+    } catch (e) {
+      return json(res, 500, { ok: false, error: String((e && e.message) || e) });
+    }
   }],
 
   // ---- 生态系统底层注入状态 ----
@@ -1568,8 +1755,33 @@ const routes = [...routerMgmtRoutes,
     let { source, tool = 'all', scope = 'global' } = body || {};
     if (!source) return json(res, 400, { error: '缺少 source' });
     source = String(source).trim().replace(/^asm\s+install\s+/i, '');
+    // github 源且 git 端点不可达时跳过 asm 的 git clone，直接 tarball 直装
+    const isGithub = /^(?:github:|https?:\/\/github\.com\/)/.test(source);
+    if (isGithub && !(await githubGitReachable())) {
+      const direct = await installGithubSkillDirect(source);
+      if (direct && direct.ok) {
+        const synced = await syncAllSkills();
+        return json(res, 200, { code: 0, via: 'github-tarball', installed: direct.name, synced });
+      }
+      if (direct && direct.error) {
+        const args = ['install', source, '-s', scope, '-p', tool, '-y', '--json'];
+        const { r } = await asmInstallWithPathFix(source, args);
+        const data = tryJson(r.stdout);
+        const synced = r.code === 0 ? await syncAllSkills() : null;
+        return json(res, r.code === 0 ? 200 : 500, { code: r.code, via: `直装失败(${direct.error})后回退asm`, result: data, synced, stdout: r.stdout.slice(-4000), stderr: r.stderr.slice(-2000) });
+      }
+    }
     const args = ['install', source, '-s', scope, '-p', tool, '-y', '--json'];
     const { r } = await asmInstallWithPathFix(source, args);
+    // asm 失败且是 github 源时回退 tarball 直装（git 端点抖动时避免只报失败）
+    if (r.code !== 0 && isGithub) {
+      githubGitOk = null;
+      const direct = await installGithubSkillDirect(source);
+      if (direct && direct.ok) {
+        const synced = await syncAllSkills();
+        return json(res, 200, { code: 0, via: 'github-tarball', installed: direct.name, synced });
+      }
+    }
     const data = tryJson(r.stdout);
     // 安装成功后自动同步到所有 Agent skill 目录
     const synced = r.code === 0 ? await syncAllSkills() : null;
@@ -1596,6 +1808,7 @@ const routes = [...routerMgmtRoutes,
       ({ r, usedSource } = await asmInstallWithPathFix(source, args));
     }
     if (r.code !== 0 && isGithub) {
+      githubGitOk = null; // asm 失败说明 git 探测可能是缓存的旧结果，重置以便下次重新探测
       const direct = await installGithubSkillDirect(usedSource);
       if (direct && direct.ok) {
         const synced = await syncAllSkills();
@@ -1634,87 +1847,6 @@ const routes = [...routerMgmtRoutes,
     const r = await asmRun([m[1], String(name), '-y', '--json'], 120000);
     const data = tryJson(r.stdout);
     json(res, r.code === 0 ? 200 : 500, { code: r.code, result: data, stdout: r.stdout.slice(-4000), stderr: r.stderr.slice(-2000) });
-  }],
-  // ---- 自动路由（Hermes 本地模型路由器 ~/.hermes/router）----
-  ['GET', /^\/api\/router\/status$/, async (req, res) => {
-    const [router, ollama] = await Promise.all([
-      fetch('http://127.0.0.1:8788/healthz', { signal: AbortSignal.timeout(4000) }).then((r) => r.json()).catch(() => null),
-      fetch('http://127.0.0.1:11434/api/tags', { signal: AbortSignal.timeout(4000) }).then((r) => r.json()).catch(() => null),
-    ]);
-    let cfg = null;
-    try { cfg = JSON.parse(await readFile(path.join(HOME, '.hermes', 'router', 'config.json'), 'utf8')); } catch { /* 无配置 */ }
-    const routesView = {};
-    if (cfg && cfg.routes) {
-      for (const [name, r] of Object.entries(cfg.routes)) {
-        const chain = [r, ...(r.fallbacks || (r.fallback ? [r.fallback] : []))];
-        routesView[name] = {
-          model: r.model,
-          host: String(r.baseUrl || '').replace(/^https?:\/\//, '').split('/')[0],
-          fallbacks: chain.slice(1).map((f) => f.model),
-        };
-      }
-    }
-    json(res, 200, {
-      routerOk: !!(router && router.ok),
-      routerInfo: router || null,
-      ollamaOk: !!ollama,
-      classifier: cfg && cfg.classifierModel,
-      routes: routesView,
-    });
-  }],
-  ['GET', /^\/api\/router\/stats$/, async (req, res) => {
-    try {
-      const text = await readFile(path.join(HOME, '.hermes', 'router', 'router.log'), 'utf8').catch(() => '');
-      const lines = text.trim() ? text.trim().split('\n') : [];
-      const today = new Date().toISOString().slice(0, 10);
-      const counts = {};
-      let fails = 0, stick = 0, total = 0;
-      for (const l of lines) {
-        if (!l.includes(today)) continue;
-        total++;
-        const m = l.match(/route=(\w+)/);
-        if (m) counts[m[1]] = (counts[m[1]] || 0) + 1;
-        if (l.includes(' FAIL ')) fails++;
-        if (l.includes('stick=1')) stick++;
-      }
-      json(res, 200, { date: today, total, counts, fails, stick, tail: lines.slice(-20) });
-    } catch (e) { json(res, 500, { error: String(e) }); }
-  }],
-  ['GET', /^\/api\/router\/balance$/, async (req, res) => {
-    if (balanceCache && Date.now() - balanceCache.ts < 60000) return json(res, 200, balanceCache.data);
-    const r = await runCmd('/usr/bin/python3', [path.join(HOME, '.hermes', 'watchdog', 'balance_check.py')], 90000);
-    if (r.code === 0) {
-      const data = tryJson(r.stdout);
-      if (data) {
-        balanceCache = { ts: Date.now(), data };
-        return json(res, 200, data);
-      }
-    }
-    json(res, 200, { error: (r.stderr || r.stdout || 'balance check failed').slice(-300) });
-  }],
-  ['POST', /^\/api\/router\/restart$/, async (req, res) => {
-    const r = await runCmd('launchctl', ['kickstart', '-k', 'gui/501/ai.hermes.router'], 15000);
-    json(res, r.code === 0 ? 200 : 500, { ok: r.code === 0, stderr: r.stderr.slice(-200) });
-  }],
-  ['GET', /^\/api\/router\/digests$/, async (req, res) => {
-    const dir = path.join(HOME, '.hermes', 'watchdog');
-    try {
-      const files = (await readdir(dir)).filter((f) => /^digest-\d{8}\.md$/.test(f)).sort().reverse();
-      const list = [];
-      for (const f of files.slice(0, 30)) {
-        const st = await stat(path.join(dir, f));
-        list.push({ name: f, mtime: st.mtime.toISOString(), size: st.size });
-      }
-      json(res, 200, { digests: list });
-    } catch (e) { json(res, 500, { error: String(e) }); }
-  }],
-  ['GET', /^\/api\/router\/digest$/, async (req, res) => {
-    const name = new URL(req.url, 'http://x').searchParams.get('name') || '';
-    if (!/^digest-\d{8}\.md$/.test(name)) return json(res, 400, { error: 'bad name' });
-    try {
-      const content = await readFile(path.join(HOME, '.hermes', 'watchdog', name), 'utf8');
-      json(res, 200, { name, content });
-    } catch (e) { json(res, 404, { error: String(e) }); }
   }],
   // ---------- 反向代理管理 ----------
   ['GET', /^\/api\/proxy\/list$/, async (req, res) => {
@@ -1816,8 +1948,18 @@ const CACHEABLE_GET = /^\/api\/(overview|agents|mcp\/(servers|health|keys|settin
 const server = http.createServer(async (req, res) => {
   const url = new URL(req.url, `http://localhost:${PORT}`);
   try {
+    const proxyEntry = matchProxy(url.pathname);
+    const boundaryError = proxyEntry
+      ? proxyRequestAllowed(req, PORT, config.proxyAllowedOrigins)
+      : requestAllowed(req, PORT, url.pathname.startsWith('/api/') && url.pathname !== '/api/session' ? WRITE_TOKEN : null);
+    if (boundaryError) return json(res, boundaryError.status, { error: boundaryError.error });
+    if (!proxyEntry && req.method === 'OPTIONS') { res.writeHead(204); return res.end(); }
     if (req.method !== 'GET' && req.method !== 'HEAD') GET_CACHE.clear();
     if (url.pathname.startsWith('/api/')) {
+      if (url.pathname === '/api/session' && req.method === 'GET') {
+        res.setHeader('Cache-Control', 'no-store');
+        return json(res, 200, { writeToken: WRITE_TOKEN });
+      }
       let body;
       if (req.method !== 'GET' && req.method !== 'HEAD') body = await readBody(req);
       if (req.method === 'GET' && CACHEABLE_GET.test(url.pathname)) {
@@ -1856,18 +1998,23 @@ const server = http.createServer(async (req, res) => {
     const px = matchProxy(url.pathname);
     if (px) return proxyHttp(req, res, px);
     let fp = path.join(__dirname, 'public', url.pathname === '/' ? 'index.html' : url.pathname === '/favicon.ico' ? '/icons/logo.png' : decodeURIComponent(url.pathname));
-    if (!fp.startsWith(path.join(__dirname, 'public'))) return json(res, 403, { error: 'Forbidden' });
+    if (!containedPath(path.join(__dirname, 'public'), fp)) return json(res, 403, { error: 'Forbidden' });
     try {
-      const data = await readFile(fp);
+      const resolved = await realpath(fp);
+      if (!containedPath(path.join(__dirname, 'public'), resolved)) return json(res, 403, { error: 'Forbidden' });
+      const data = await readFile(resolved);
       const headers = { 'Content-Type': MIME[path.extname(fp)] || 'application/octet-stream' };
-      if (path.extname(fp) === '.html') headers['Cache-Control'] = 'no-store'; // 面板单页应用，避免浏览器缓存旧 UI
+      if (path.extname(fp) === '.html') {
+        headers['Cache-Control'] = 'no-store';
+        headers['Set-Cookie'] = `agent_manager_session=${WRITE_TOKEN}; HttpOnly; SameSite=Strict; Path=/api`;
+      }
       res.writeHead(200, headers);
       res.end(data);
     } catch {
       json(res, 404, { error: 'Not found' });
     }
   } catch (e) {
-    json(res, 500, { error: String(e && e.message ? e.message : e) });
+    json(res, e.statusCode || 500, { error: e.statusCode ? e.message : 'Internal server error' });
   }
 });
 
@@ -1928,6 +2075,7 @@ async function ensureBuiltinInfra() {
 
 // WebSocket 升级走反代（MCP/Agent 实时通道）
 server.on('upgrade', (req, socket, head) => {
+  if (proxyRequestAllowed(req, PORT, config.proxyAllowedOrigins)) { socket.destroy(); return; }
   const entry = matchProxy(new URL(req.url, `http://localhost:${PORT}`).pathname);
   if (!entry) { socket.destroy(); return; }
   let u;
@@ -1960,6 +2108,10 @@ server.on('upgrade', (req, socket, head) => {
 server.listen(PORT, '127.0.0.1', () => {
   console.log(`Agent Manager running at http://localhost:${PORT}`);
   console.log(`MCPHub: ${HUB_URL}  asm: ${ASM}`);
+  if (!config.startupEffects) {
+    console.log('[startup] isolated mode: background integrations disabled');
+    return;
+  }
   initOrchestrator().catch((e) => console.log('[orch] init failed:', e.message));
   loadProxy().then(() => console.log(`[proxy] ${proxyEntries.filter((e) => e.enabled).length} 条代理已加载`)).catch((e) => console.log('[proxy] load failed:', e.message));
   ensureBuiltinInfra().catch((e) => console.log('[builtin] failed:', e.message));
@@ -2019,6 +2171,7 @@ const watchPaths = (p, fn) => {
 
 // MCP 配置文件 + WorkBuddy 插件清单 + 连接器凭据目录
 const mcpWatch = new Set();
+if (config.startupEffects) {
 for (const a of AGENTS) for (const f of a.mcpFiles || []) mcpWatch.add(f.path);
 mcpWatch.add(`${HOME}/.workbuddy/plugins/installed_plugins.json`);
 mcpWatch.add(`${HOME}/.workbuddy/plugins/configured-plugins.json`);
@@ -2041,3 +2194,4 @@ for (const d of skillWatch) {
   if (!watchPaths(d, onSkillChange)) watchPaths(path.dirname(d), onSkillChange);
 }
 console.log(`[watch] watching ${mcpWatch.size} MCP paths, ${skillWatch.size} skill dirs`);
+}
