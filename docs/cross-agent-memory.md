@@ -1,3 +1,5 @@
+[English](cross-agent-memory.en.md) · [中文](cross-agent-memory.md)
+
 # 跨 Agent 对话与记忆继承
 
 [← 返回 README](../README.md)

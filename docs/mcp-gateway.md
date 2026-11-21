@@ -1,3 +1,5 @@
+[English](mcp-gateway.en.md) · [中文](mcp-gateway.md)
+
 # MCPHub 网关与路径复用
 
 [← 返回 README](../README.md)

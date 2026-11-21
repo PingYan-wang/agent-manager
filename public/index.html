@@ -353,6 +353,7 @@
   #cmdkBtn{margin-left:12px;font-family:var(--mono);font-size:11px}
 </style>
 <script src="/lib/deep-chat.js" type="module"></script>
+<script src="/i18n-en.js"></script>
 </head>
 <body>
 <header>
@@ -366,6 +367,7 @@
     <button data-tab="router"><img class="nav-ic" src="/icons/router.png" alt="">自动路由</button>
     <button data-tab="proxy"><img class="nav-ic" src="/icons/proxy.png" alt="">反代</button>
   </nav>
+  <button class="ghost" id="langBtn" onclick="toggleLang()" title="Switch language / 切换语言">EN</button>
   <button class="ghost" id="cmdkBtn" onclick="cmdkToggle()" title="命令面板 (⌘K)">⌘K</button>
 </header>
 <main>
@@ -945,8 +947,11 @@ function agentSkillAction(path, agentName, link){ openInstallModal(path, link); 
 // ---------- 市场 ----------
 // 一键安装：asm global+all（github 断连走 tarball 直装）→ 服务端自动 syncAllSkills 铺到所有 Agent
 async function quickInstallSkill(source, btn){
-  if(btn){ btn.disabled=true; btn.textContent='安装中…'; btn.classList.remove('done','fail'); btn.classList.add('busy'); }
+  let iv=null;
+  if(btn){ btn.disabled=true; btn.textContent='安装中…'; btn.classList.remove('done','fail'); btn.classList.add('busy');
+    const t0=Date.now(); iv=setInterval(()=>{ if(btn.isConnected) btn.textContent='安装中… '+Math.round((Date.now()-t0)/1000)+'s'; },1000); }
   const r = await api('/api/skills/quick-install',{method:'POST',body:{source}});
+  if(iv) clearInterval(iv);
   if(r.code===0){
     const n = ((r.synced&&r.synced.created)||[]).length;
     toast(`已安装并同步到所有 Agent${r.via==='github-tarball'?'（tarball 直装）':''}${r.resolvedSource?'（已修正仓库路径）':''}${n?'（新建 '+n+' 个链接）':''}`);
@@ -1892,6 +1897,102 @@ function proxyQuickAdd(port, proc){
 // ---------- init ----------
 hubHealth(); loadAgents();
 setInterval(hubHealth, 30000);
+
+// ===== i18n 中/EN 切换 =====
+let amLang = localStorage.getItem('am-lang') || 'zh';
+let __amRe = null, __amFixing = false;
+const AM_CJK = /[一-鿿]/;
+const AM_ATTRS = ['placeholder', 'title', 'aria-label', 'alt', 'value'];
+function amDict() { return window.__AM_I18N__ || {}; }
+function amRe() {
+  if (!__amRe) {
+    const ks = Object.keys(amDict()).sort((a, b) => b.length - a.length);
+    __amRe = new RegExp(ks.map(k => k.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')).join('|'), 'g');
+  }
+  return __amRe;
+}
+function trEn(s) {
+  const d = amDict();
+  return s.replace(amRe(), m => (d[m] !== undefined ? d[m] : m))
+    .replace(/……/g, '…').replace(/ {2,}/g, ' ');
+}
+function amTranslateText(node) {
+  const v = node.nodeValue;
+  if (!v || !AM_CJK.test(v)) return;
+  if (node.__amOrig === undefined) node.__amOrig = v;
+  const nv = trEn(v);
+  if (nv !== v) node.nodeValue = nv;
+}
+function amWalkTranslate(root) {
+  if (root.nodeType === 3) return amTranslateText(root);
+  if (root.nodeType !== 1 && root.nodeType !== 9 && root.nodeType !== 11) return;
+  if (root.nodeType === 1) {
+    const tag = root.tagName;
+    if (tag === 'SCRIPT' || tag === 'STYLE') return;
+    for (const a of AM_ATTRS) {
+      const v = root.getAttribute(a);
+      if (v && AM_CJK.test(v)) {
+        (root.__amOrigAttr = root.__amOrigAttr || {})[a] = v;
+        const nv = trEn(v);
+        if (nv !== v) root.setAttribute(a, nv);
+      }
+    }
+  }
+  const w = document.createTreeWalker(root, NodeFilter.SHOW_TEXT, {
+    acceptNode: n => (n.parentElement && (n.parentElement.tagName === 'SCRIPT' || n.parentElement.tagName === 'STYLE')) ? NodeFilter.FILTER_REJECT : NodeFilter.FILTER_ACCEPT
+  });
+  let n; while ((n = w.nextNode())) amTranslateText(n);
+}
+function amRestoreText(node) {
+  if (node.__amOrig !== undefined) { node.nodeValue = node.__amOrig; node.__amOrig = undefined; }
+}
+function amRestore(root) {
+  if (root.nodeType === 3) return amRestoreText(root);
+  if (root.nodeType !== 1 && root.nodeType !== 9 && root.nodeType !== 11) return;
+  if (root.nodeType === 1 && root.__amOrigAttr) {
+    for (const [a, v] of Object.entries(root.__amOrigAttr)) root.setAttribute(a, v);
+    root.__amOrigAttr = undefined;
+  }
+  const w = document.createTreeWalker(root, NodeFilter.SHOW_TEXT);
+  let n; while ((n = w.nextNode())) amRestoreText(n);
+}
+function applyLang() {
+  const b = $('#langBtn');
+  if (b) b.textContent = amLang === 'en' ? '中' : 'EN';
+  if (amLang === 'en') amWalkTranslate(document.body);
+  else amRestore(document.body);
+  document.documentElement.lang = amLang === 'en' ? 'en' : 'zh-CN';
+}
+function toggleLang() {
+  amLang = amLang === 'en' ? 'zh' : 'en';
+  localStorage.setItem('am-lang', amLang);
+  applyLang();
+}
+if (window.__AM_I18N__) {
+  document.__amOrigTitle = document.title;
+  new MutationObserver(muts => {
+    if (__amFixing || amLang !== 'en') return;
+    __amFixing = true;
+    for (const m of muts) {
+      if (m.type === 'characterData') amTranslateText(m.target);
+      else if (m.type === 'childList') m.addedNodes.forEach(n => amWalkTranslate(n));
+      else if (m.type === 'attributes' && AM_ATTRS.includes(m.attributeName)) {
+        const v = m.target.getAttribute(m.attributeName);
+        if (v && AM_CJK.test(v)) {
+          (m.target.__amOrigAttr = m.target.__amOrigAttr || {})[m.attributeName] = v;
+          const nv = trEn(v);
+          if (nv !== v) m.target.setAttribute(m.attributeName, nv);
+        }
+      }
+    }
+    __amFixing = false;
+  }).observe(document.body, { childList: true, subtree: true, characterData: true, attributes: true, attributeFilter: AM_ATTRS });
+  document.addEventListener('DOMContentLoaded', () => {
+    document.__amOrigTitle = document.title;
+    applyLang();
+    document.title = amLang === 'en' ? trEn(document.__amOrigTitle) : document.__amOrigTitle;
+  });
+}
 </script>
 </body>
 </html>

@@ -1,3 +1,5 @@
+[English](routing.en.md) · [中文](routing.md)
+
 # LLM 智能路由
 
 [← 返回 README](../README.md)

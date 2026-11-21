@@ -1,3 +1,5 @@
+[English](README.en.md) · [中文](README.md)
+
 <p align="center">
   <img src="docs/assets/hero.png" alt="Agent Manager" width="880"/>
 </p>

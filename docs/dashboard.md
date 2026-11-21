@@ -1,3 +1,5 @@
+[English](dashboard.en.md) · [中文](dashboard.md)
+
 # 用量看板与巡检日报
 
 [← 返回 README](../README.md)
