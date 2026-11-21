@@ -88,6 +88,9 @@
   button.btn:hover{background:var(--accent)}
   button.btn:active{transform:translateY(1px)}
   button.btn:disabled{opacity:.45;cursor:default}
+  button.btn.busy{opacity:.7;cursor:wait}
+  button.btn.done{background:var(--ok);opacity:1;cursor:default}
+  button.btn.fail{background:var(--danger);opacity:1;cursor:pointer}
   button.ghost{
     background:transparent;border:1px solid var(--line-strong);color:var(--muted);
     padding:6px 12px;border-radius:var(--r-sm);cursor:pointer;font-size:12px;
@@ -432,26 +435,6 @@ Dashboard:  http://localhost:3000  (账号见 MCPHub Dashboard)
 
   <section id="tab-router" style="display:none">
     <div class="card">
-      <div class="toolbar"><h3>自动路由</h3><span class="muted" id="routerMeta" style="margin-left:auto"></span></div>
-      <div id="routerStatus"><div class="empty">加载中…</div></div>
-    </div>
-    <div class="card">
-      <div class="toolbar"><h3>路由策略</h3><span class="muted" style="margin-left:auto">auto 按任务自动分类；也可在 Hermes 中手动选 simple / coding / complex / expert</span></div>
-      <div id="routerRoutes"><div class="empty">加载中…</div></div>
-    </div>
-    <div class="card">
-      <div class="toolbar"><h3>路由配置</h3><span class="muted" style="margin-left:auto">自定义厂商与路由；保存后路由器自动热重载，API Key 留空表示不修改</span></div>
-      <div id="routerCfg"><div class="empty">加载中…</div></div>
-    </div>
-    <div class="card">
-      <div class="toolbar"><h3>分类器（分流小模型）</h3><span class="muted" style="margin-left:auto">默认云端；本地模式可一键下载 Ollama 模型</span></div>
-      <div id="routerClassifier"><div class="empty">加载中…</div></div>
-    </div>
-    <div class="card">
-      <div class="toolbar"><h3>Agent 接入自动路由</h3><span class="muted" style="margin-left:auto">一键把 Agent 的 LLM 指向自动路由</span></div>
-      <div id="routerAgents"><div class="empty">加载中…</div></div>
-    </div>
-    <div class="card">
       <div class="toolbar"><h3>今日用量</h3><span style="margin-left:auto;display:flex;gap:6px;align-items:center"><button class="ghost" onclick="rcUsageView('route')">路线</button><button class="ghost" onclick="rcUsageView('provider')">服务商</button><button class="ghost" onclick="loadRouter()">↻ 刷新</button></span></div>
       <div id="routerStats"><div class="empty">加载中…</div></div>
       <div id="routerUsageDetail"></div>
@@ -470,6 +453,31 @@ Dashboard:  http://localhost:3000  (账号见 MCPHub Dashboard)
     <div class="card">
       <div class="toolbar"><h3>巡检日报</h3><span class="muted" style="margin-left:auto">每天 21:00 由本地看门狗生成</span></div>
       <div id="routerDigests"><div class="empty">加载中…</div></div>
+    </div>
+    <div class="card">
+      <div class="toolbar"><h3>自动路由</h3><span class="muted" id="routerMeta" style="margin-left:auto"></span></div>
+      <div id="routerStatus"><div class="empty">加载中…</div></div>
+    </div>
+    <div class="card">
+      <div class="toolbar"><h3>路由策略</h3><span class="muted" style="margin-left:auto">auto 按任务自动分类；也可在 Hermes 中手动选 simple / coding / complex / expert</span></div>
+      <div id="routerRoutes"><div class="empty">加载中…</div></div>
+    </div>
+    <div class="card">
+      <div class="toolbar"><h3>路由配置</h3><span class="muted" style="margin-left:auto">自定义厂商与路由；保存后路由器自动热重载，API Key 留空表示不修改</span><button onclick="rcSaveConfig()">保存配置</button></div>
+      <div class="subtabs">
+        <button class="subtab active" data-rcview="routes">路由</button>
+        <button class="subtab" data-rcview="providers">厂商</button>
+        <button class="subtab" data-rcview="budgets">预算</button>
+      </div>
+      <div id="routerCfg"><div class="empty">加载中…</div></div>
+    </div>
+    <div class="card">
+      <div class="toolbar"><h3>分类器（分流小模型）</h3><span class="muted" style="margin-left:auto">默认云端；本地模式可一键下载 Ollama 模型</span></div>
+      <div id="routerClassifier"><div class="empty">加载中…</div></div>
+    </div>
+    <div class="card">
+      <div class="toolbar"><h3>Agent 接入自动路由</h3><span class="muted" style="margin-left:auto">一键把 Agent 的 LLM 指向自动路由</span></div>
+      <div id="routerAgents"><div class="empty">加载中…</div></div>
     </div>
   </section>
 
@@ -858,16 +866,18 @@ function agentSkillAction(path, agentName, link){ openInstallModal(path, link); 
 
 // ---------- 市场 ----------
 // 一键安装：asm global+all（github 断连走 tarball 直装）→ 服务端自动 syncAllSkills 铺到所有 Agent
-async function quickInstallSkill(source){
-  toast('正在安装 '+source+' …');
+async function quickInstallSkill(source, btn){
+  if(btn){ btn.disabled=true; btn.textContent='安装中…'; btn.classList.remove('done','fail'); btn.classList.add('busy'); }
   const r = await api('/api/skills/quick-install',{method:'POST',body:{source}});
   if(r.code===0){
     const n = ((r.synced&&r.synced.created)||[]).length;
     toast(`已安装并同步到所有 Agent${r.via==='github-tarball'?'（tarball 直装）':''}${r.resolvedSource?'（已修正仓库路径）':''}${n?'（新建 '+n+' 个链接）':''}`);
+    if(btn){ btn.textContent='已同步 ✓'; btn.classList.remove('busy'); btn.classList.add('done'); }
     localSkillsCache=null; loadSkills(); loadAgents();
     if($('#skillSearch') && $('#skillSearch').value.trim()) searchSkills();
     if($('#skillMktEss')) loadSkillMarket();
   } else {
+    if(btn){ btn.disabled=false; btn.textContent='安装失败 · 重试'; btn.classList.remove('busy'); btn.classList.add('fail'); }
     modal(`<h3>安装失败 · ${esc(source)}</h3><pre>${esc((((r.stderr||'')+(r.stdout||'')||r.error||'未知错误')+'\n'+(r.via&&r.via!=='asm'?'['+r.via+']':'')).slice(-3000))}</pre>
       <div class="actions"><button class="ghost" onclick="closeModal()">关闭</button><button class="btn" onclick="closeModal();openInstallModal('${esc(source)}')">改用手动安装</button></div>`);
   }
@@ -1211,7 +1221,7 @@ document.addEventListener('click', e => {
   if(!el) return;
   const act = el.dataset.act || 'market-install';
   const d = el.dataset;
-  if(act==='market-install'){ quickInstallSkill(d.source); return; }
+  if(act==='market-install'){ quickInstallSkill(d.source, el); return; }
   if(act==='import-mcp'){ api('/api/agents/import-mcp',{method:'POST',body:{agentId:d.agent,serverName:d.name}}).then(r=>{ toast(r.success===false?'导入失败: '+(r.message||''):'已导入 '+d.name+' → MCPHub', r.success===false); loadServers(); }); return; }
   if(act==='agent-repair'){ agentRepair(d.agent, d.what); return; }
   if(act==='link-skill'){ agentSkillAction(d.path, d.agent, true); return; }
