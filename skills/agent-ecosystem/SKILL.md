@@ -22,9 +22,9 @@ description: 本机 Agent 生态系统的统一能力入口。当用户提到其
 
 本机所有已安装 skill 会自动 symlink 铺到**每个 Agent 的原生 skill 目录**。你看到的 skill 列表就是全集；如果某 skill "应该存在但看不到"，提示用户到 http://localhost:3100 →「已安装 Skills」点「同步全部 skill 到所有 agent」。
 
-## 3. 会话读取 / 对话继承（agent-bridge MCP）
+## 3. 会话读取 / 对话继承 / 共享记忆（agent-bridge MCP）
 
-通过 MCP 工具访问本机各 Agent 的会话记录——**包括你自己这个 Agent 的历史对话**（对话继承能力），也包括其他 Agent 的对话（跨系统）。
+通过 MCP 工具访问本机各 Agent 的会话记录与共享记忆——**包括你自己这个 Agent 的历史对话**（对话继承能力），也包括其他 Agent 的对话（跨系统）。
 
 工具（前缀 `agent-bridge-`）：
 
@@ -32,13 +32,19 @@ description: 本机 Agent 生态系统的统一能力入口。当用户提到其
 |---|---|
 | `agent-bridge-agents_list` | 列出哪些 Agent 有可读的本地会话存储 |
 | `agent-bridge-conversations_list` | 列某 Agent 最近会话（参数 `agent`, `limit`） |
-| `agent-bridge-conversation_read` | 读某条会话内容（参数 `agent`, `conversation_id`, `max_chars`） |
+| `agent-bridge-conversation_read` | 读某条会话内容（参数 `agent`, `id`, `max_chars`） |
+| `agent-bridge-conversations_search` | **关键词搜索会话内容**（参数 `query`, `agent` 可选=全部, `limit`）——不确定在哪个会话时先搜它 |
+| `agent-bridge-memory_save` | 把结论/笔记写入共享记忆（参数 `agent`, `title`, `content`, `tags`） |
+| `agent-bridge-memory_search` | 搜索共享记忆（参数 `query`, `agent` 可选, `limit`） |
 
 `agent` 参数取值：`hermes` / `devin` / `codex` / `workbuddy` 等。读**自己**的历史对话就用自己的 agent 名（例如你是 Devin 就传 `devin`）；读其他 Agent 的对话同理换名字。会话 id 支持前缀匹配。内容默认截断 30000 字符。
 
-典型用法：用户说"继续之前那个对话/看看 hermes 昨天聊了什么/上次 codex 做了什么"→ 先 `conversations_list` 找 id → `conversation_read` 读内容 → 接着上下文继续工作。
+典型用法：
+- 用户说"继续之前那个对话/看看 hermes 昨天聊了什么/上次 codex 做了什么"→ `conversations_list` 找 id → `conversation_read` 读内容 → 接着上下文继续工作
+- 用户说"之前是不是研究过 XX/找一下关于 YY 的讨论"→ `conversations_search` 一把搜全部 Agent 的会话，拿到 agent+id 再 `conversation_read` 细读
+- 完成有沉淀价值的任务后 → `memory_save` 写一条笔记（标题+结论+标签）；之后任何 Agent 都能 `memory_search` 找到，实现跨 Agent/跨会话的记忆继承
 
-注意：codex/workbuddy 的本地存储目前只有元数据或为空，内容最全的是 hermes 和 devin。
+共享记忆库：`~/.agent-manager/memory.jsonl`（追加写，按 agent/tag 可过滤）。注意控制写入频率，只存值得长期复用的结论，不要把过程日志当记忆写。
 
 ## 4. 任务编排器（长程任务 / 子 Agent）
 
@@ -63,6 +69,7 @@ Agent Manager 内置编排器，把复杂目标自动拆成子任务、派发给
 
 ## 使用原则
 
-1. 涉及"别的 Agent/别的对话/之前做过的事"→ 优先用 agent-bridge 查证，不要凭猜测回答
+1. 涉及"别的 Agent/别的对话/之前做过的事/以前的结论"→ 优先用 agent-bridge 查证（会话搜索或共享记忆），不要凭猜测回答
 2. 长程/多步骤/需要多角色协作的任务 → 建议用户用编排器，或在被允许时通过 API 创建编排任务
-3. MCP/skill 缺失时先查网关状态，别重复造轮子
+3. 完成有复用价值的任务 → `agent-bridge-memory_save` 沉淀结论，供其他 Agent 继承
+4. MCP/skill 缺失时先查网关状态，别重复造轮子

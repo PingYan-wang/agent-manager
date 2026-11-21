@@ -484,7 +484,7 @@ const ECOSYSTEM_BLOCK = `<!-- agent-ecosystem:begin -->
 - MCP 统一网关 http://localhost:3000/mcp 已接入并含腾讯文档/ima/lighthouse 等 WorkBuddy MCP：工具直接可用（命名 mcp__mcphub__<服务名>__<工具>），勿重复安装同类 MCP；新装 MCP 会自动同步进网关。
 - 网关现有服务清单（名称/状态/工具数）见 ${path.join(DATA_DIR, 'gateway-catalog.md')}，不确定有没有某能力时先读它。
 - Skill 已全量同步到你的 skill 目录；缺失时提示用户在 Agent Manager (http://localhost:3100) 点「同步全部 skill」。
-- 会话继承/跨 Agent 读取：用 MCP 工具 agent-bridge-agents_list / agent-bridge-conversations_list / agent-bridge-conversation_read，agent 参数填本 Agent 名即可读自己的历史对话。
+- 会话继承/跨 Agent 读取与共享记忆：MCP 工具 agent-bridge-*（conversations_search 关键词搜全部 Agent 会话；memory_save/memory_search 共享记忆库），agent 参数填本 Agent 名即可读自己的历史。
 - 长程任务/子 Agent 编排：详见 skill agent-ecosystem；REST API http://localhost:3100/api/orchestrator/*。
 涉及其他 Agent 对话、MCP、skill、任务编排时，先查这些能力再动手。
 <!-- agent-ecosystem:end -->`;

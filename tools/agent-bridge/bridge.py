@@ -1,18 +1,23 @@
 #!/usr/bin/env python3
-"""agent-bridge: 跨 Agent 会话读取 MCP server (stdio, newline-delimited JSON-RPC).
+"""agent-bridge: 跨 Agent 会话读取 + 共享记忆 MCP server (stdio, newline-delimited JSON-RPC).
 
-让任意接入 MCPHub 的 Agent 都能列出/读取本机其他 Agent 的会话记录。
+让任意接入 MCPHub 的 Agent 都能列出/读取/搜索本机其他 Agent 的会话记录，
+并通过共享记忆文件在 Agent 之间传递结论（记忆继承）。
 数据源(只读):
   hermes   -> ~/.hermes/state.db (sessions + messages)
   devin    -> ~/.local/share/devin/cli/summaries/history_*.md
   codex    -> ~/.codex/state_5.sqlite threads(+rollout 文件,目前为空)
   workbuddy-> ~/.workbuddy/tasks/*/*.json (任务元数据,非完整对话)
+共享记忆:   ~/.agent-manager/memory.jsonl (memory_save/memory_search 读写)
 """
 import json, os, sys, glob, sqlite3, time
 from pathlib import Path
 
 HOME = Path.home()
 MAX_CHARS = 30000
+MEMORY_FILE = HOME / ".agent-manager" / "memory.jsonl"
+MEMORY_MAX_CONTENT = 8000
+MEMORY_READ_TAIL = 4000  # 只读末尾 N 行，控制开销
 
 def _ro_db(path):
     return sqlite3.connect(f"file:{path}?mode=ro", uri=True)
@@ -141,6 +146,139 @@ def workbuddy_read(cid, max_chars):
             pass
     return _truncate("\n\n".join(out) or None, max_chars)
 
+def _snippet(text, q, span=80):
+    i = text.lower().find(q.lower())
+    if i < 0:
+        return text[:span * 2]
+    s = max(0, i - span)
+    return ("…" if s else "") + text[s:i + len(q) + span].replace("\n", " ") + ("…" if i + len(q) + span < len(text) else "")
+
+# ---------- adapters: search ----------
+
+def _like_pat(q):
+    return "%" + q.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_") + "%"
+
+def hermes_search(query, limit):
+    db = _ro_db(HOME / ".hermes/state.db")
+    try:
+        pat = _like_pat(query)
+        rows = db.execute(
+            "select m.session_id, coalesce(s.title, s.display_name, s.session_key), count(*), max(m.timestamp) "
+            "from messages m join sessions s on s.id = m.session_id "
+            "where m.content like ? escape '\\' or coalesce(s.title,'') like ? escape '\\' "
+            "   or coalesce(s.display_name,'') like ? escape '\\' "
+            "group by m.session_id order by max(m.timestamp) desc limit ?",
+            (pat, pat, pat, limit)).fetchall()
+    finally:
+        db.close()
+    return [{"id": r[0], "title": r[1] or r[0][:24], "matches": r[2], "last_at": r[3]} for r in rows]
+
+def devin_search(query, limit):
+    res = []
+    for f in sorted(glob.glob(str(HOME / ".local/share/devin/cli/summaries/history_*.md")),
+                    key=lambda p: os.path.getmtime(p), reverse=True):
+        if len(res) >= limit:
+            break
+        try:
+            text = open(f, errors="replace").read()
+        except Exception:
+            continue
+        if query.lower() not in text.lower():
+            continue
+        title = ""
+        for line in text.splitlines():
+            line = line.strip()
+            if line and not line.startswith("==="):
+                title = line[:80]; break
+        res.append({"id": f.split("/")[-1][:-3], "title": title or f, "matches": text.lower().count(query.lower()),
+                    "snippet": _snippet(text, query), "mtime": os.path.getmtime(f)})
+    return res
+
+def codex_search(query, limit):
+    p = HOME / ".codex/state_5.sqlite"
+    if not p.exists():
+        return []
+    db = _ro_db(p)
+    try:
+        pat = _like_pat(query)
+        rows = db.execute(
+            "select id, coalesce(title, name, preview, first_user_message, id), updated_at, coalesce(preview,'') "
+            "from threads where archived=0 and (coalesce(title,'') like ? escape '\\' or coalesce(preview,'') like ? escape '\\' "
+            "or coalesce(name,'') like ? escape '\\' or coalesce(first_user_message,'') like ? escape '\\') "
+            "order by updated_at desc limit ?", (pat, pat, pat, pat, limit)).fetchall()
+    except sqlite3.Error:
+        rows = []
+    db.close()
+    return [{"id": r[0], "title": (r[1] or r[0])[:80], "updated_at": r[2], "snippet": _snippet(r[3] or "", query)} for r in rows]
+
+def workbuddy_search(query, limit):
+    res = []
+    q = query.lower()
+    for f in sorted(glob.glob(str(HOME / ".workbuddy/tasks/*/*.json")),
+                    key=lambda p: os.path.getmtime(p), reverse=True):
+        if len(res) >= limit:
+            break
+        try:
+            d = json.load(open(f))
+        except Exception:
+            continue
+        hay = json.dumps(d, ensure_ascii=False)
+        if q not in hay.lower():
+            continue
+        res.append({"id": f"{Path(f).parent.name}:{d.get('id', Path(f).stem)}",
+                    "title": d.get("subject") or str(d.get("description", ""))[:60],
+                    "status": d.get("status"), "snippet": _snippet(hay, query), "mtime": os.path.getmtime(f)})
+    return res
+
+SEARCH_FNS = {"hermes": hermes_search, "devin": devin_search, "codex": codex_search, "workbuddy": workbuddy_search}
+
+# ---------- shared memory ----------
+
+def _memory_append(entry):
+    MEMORY_FILE.parent.mkdir(parents=True, exist_ok=True)
+    with open(MEMORY_FILE, "a", encoding="utf-8") as fh:
+        fh.write(json.dumps(entry, ensure_ascii=False) + "\n")
+
+def _memory_tail(n=MEMORY_READ_TAIL):
+    try:
+        with open(MEMORY_FILE, encoding="utf-8", errors="replace") as fh:
+            return fh.readlines()[-n:]
+    except Exception:
+        return []
+
+def memory_save(args):
+    agent = str(args.get("agent") or "unknown")[:40]
+    title = str(args.get("title") or "")[:200]
+    content = str(args.get("content") or "")[:MEMORY_MAX_CONTENT]
+    tags = [str(t)[:40] for t in (args.get("tags") or [])][:10] if isinstance(args.get("tags"), list) else []
+    if not content.strip():
+        return _err("content 不能为空")
+    entry = {"ts": time.time(), "agent": agent, "title": title, "content": content, "tags": tags}
+    _memory_append(entry)
+    return _text(json.dumps({"ok": True, "saved": True, "agent": agent, "title": title}, ensure_ascii=False))
+
+def memory_search(args):
+    query = str(args.get("query") or "").strip()
+    if not query:
+        return _err("query 不能为空")
+    agent = args.get("agent")
+    limit = int(args.get("limit", 10))
+    q = query.lower()
+    hits = []
+    for line in reversed(_memory_tail()):
+        try:
+            e = json.loads(line)
+        except Exception:
+            continue
+        if agent and e.get("agent") != agent:
+            continue
+        hay = (e.get("title", "") + " " + e.get("content", "") + " " + " ".join(e.get("tags") or [])).lower()
+        if q in hay:
+            hits.append(e)
+            if len(hits) >= limit:
+                break
+    return _text(json.dumps(hits, ensure_ascii=False, indent=2))
+
 ADAPTERS = {
     "hermes":    {"name": "Hermes",    "list": hermes_list,    "read": hermes_read,
                   "note": "~/.hermes/state.db 完整会话+消息"},
@@ -193,6 +331,25 @@ def dispatch(method, params):
                  "agent": {"type": "string"}, "id": {"type": "string"},
                  "max_chars": {"type": "integer", "default": MAX_CHARS}},
                  "required": ["agent", "id"]}},
+            {"name": "conversations_search",
+             "description": "按关键词搜索会话内容（标题+消息）。agent 留空=搜全部 Agent。用于记忆继承：不确定在哪个会话时先搜索定位",
+             "inputSchema": {"type": "object", "properties": {
+                 "query": {"type": "string"}, "agent": {"type": "string"},
+                 "limit": {"type": "integer", "default": 10}},
+                 "required": ["query"]}},
+            {"name": "memory_save",
+             "description": "把一条结论/笔记写入共享记忆库（~/.agent-manager/memory.jsonl），供其他 Agent 或未来会话检索。完成有价值的任务后建议沉淀",
+             "inputSchema": {"type": "object", "properties": {
+                 "agent": {"type": "string", "description": "写入方 Agent 名"},
+                 "title": {"type": "string"}, "content": {"type": "string"},
+                 "tags": {"type": "array", "items": {"type": "string"}}},
+                 "required": ["agent", "content"]}},
+            {"name": "memory_search",
+             "description": "搜索共享记忆库。query 关键词，agent 可选过滤来源，返回最近匹配",
+             "inputSchema": {"type": "object", "properties": {
+                 "query": {"type": "string"}, "agent": {"type": "string"},
+                 "limit": {"type": "integer", "default": 10}},
+                 "required": ["query"]}},
         ]}
     if method == "tools/call":
         name, args = params.get("name"), params.get("arguments") or {}
@@ -201,6 +358,26 @@ def dispatch(method, params):
                 data = {k: {"name": v["name"], "note": v["note"]} for k, v in ADAPTERS.items()}
                 data.update({k: {"name": k, "note": "unsupported: " + v} for k, v in UNSUPPORTED.items()})
                 return _text(json.dumps(data, ensure_ascii=False, indent=2))
+            if name == "conversations_search":
+                query = str(args.get("query") or "").strip()
+                if not query:
+                    return _err("query 不能为空")
+                agent = args.get("agent") or ""
+                limit = int(args.get("limit", 10))
+                targets = [agent] if agent in SEARCH_FNS else list(SEARCH_FNS)
+                if agent and agent not in SEARCH_FNS:
+                    return _err(f"未知 agent '{agent}'。可搜: {', '.join(SEARCH_FNS)}")
+                merged = []
+                for ag in targets:
+                    for hit in SEARCH_FNS[ag](query, limit):
+                        hit["agent"] = ag
+                        merged.append(hit)
+                merged.sort(key=lambda h: h.get("last_at") or h.get("updated_at") or h.get("mtime") or 0, reverse=True)
+                return _text(json.dumps(merged[:limit], ensure_ascii=False, indent=2))
+            if name == "memory_save":
+                return memory_save(args)
+            if name == "memory_search":
+                return memory_search(args)
             agent = args.get("agent", "")
             if agent not in ADAPTERS:
                 return _err(f"未知 agent '{agent}'。可用: {', '.join(ADAPTERS)}")
