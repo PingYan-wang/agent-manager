@@ -96,10 +96,10 @@ An OpenAI-compatible local proxy that classifies task difficulty and dispatches 
 |---|---|---|
 | `simple` | Chat, Q&A, translation | deepseek-v4.1-flash |
 | `coding` | Writing code, running commands, MCP tool calls | kimi-k3.1-pro |
-| `complex` | Architecture design, complex analysis, planning | claude-opus-5-5 |
-| `expert` | Manually designated highest-difficulty tasks | claude-fable-5-2 |
+| `complex` | Planning, complex tasks and acceptance | claude-opus-5-5 |
+| `expert` | Exceptionally difficult problems (auto-selectable) | claude-fable-5-2 |
 
-Cloud / local Ollama dual-mode classifier · session stickiness · multi-level fallback · daily budget circuit breaker · custom providers · hot reload · one-click Agent onboarding. → [Details](docs/routing.md)
+Cloud four-tier auto classifier (local Ollama disabled) · session stickiness · multi-level fallback · daily budget circuit breaker · custom providers · Devin CLI / Trae SOLO fallback bridges · hot reload · one-click Agent onboarding. → [Details](docs/routing.md)
 
 <p align="center"><img src="docs/screenshots/router.png" width="760" alt="Auto-routing panel"/></p>
 
@@ -134,7 +134,6 @@ Natural-language goal → breakdown → sub-Agent pool parallel execution → ac
 | python3 | agent-bridge MCP server (bundled with macOS) |
 | `@samanhappy/mcphub` | MCP gateway (optional, `npm i -g`) |
 | `agent-skill-manager` (asm) | Skill management (optional, `npm i -g`) |
-| Ollama (optional) | Local classifier, `brew install ollama` |
 
 ### Install
 

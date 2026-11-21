@@ -14,8 +14,10 @@ An OpenAI-compatible local proxy (`router/router.mjs`, listening on `127.0.0.1:8
 |---|---|---|
 | `simple` | Chit-chat, Q&A, translation, weather/news | deepseek-v4.1-flash |
 | `coding` | Writing code, running commands, file operations, MCP tool calls | kimi-k3.1-pro |
-| `complex` | Architecture design, complex analysis, planning | claude-opus-5-5 |
-| `expert` | Manually designated hardest tasks | claude-fable-5-2 |
+| `complex` | Architecture, task planning, complex work and acceptance checks | claude-opus-5-5 |
+| `expert` | Exceptionally difficult problems and research-level reasoning (also selectable manually) | claude-fable-5-2 |
+
+`model=auto` classifies each request into these four tiers: simple or general questions use `simple`, routine programming uses `coding`, planning, complex work and acceptance use `complex`, and genuinely hard problems use `expert`. The orchestrator pins planning and acceptance to `complex`. Requests with tools cannot remain on `simple` and are upgraded to at least `coding`; breaker and capability fallbacks still apply without using the disabled local Ollama model.
 
 Providers, chains and tiers are all editable in the UI, and new routes (e.g. `fast` / `vision`) can be added.
 
@@ -35,7 +37,9 @@ A route's chain is an **ordered list of providers**, each holding an **ordered l
 "coding": {
   "chain": [
     { "provider": "ark",     "models": ["kimi-k3.1-pro", "doubao-seed-2.1-pro"] },
-    { "provider": "wb",      "models": ["glm-5.3-flash"] },
+    { "provider": "devin",   "models": ["swe-2-high"] },
+    { "provider": "trae",    "models": ["kimi-k2.7-code", "seed-code-pro-0430"] },
+    { "provider": "wb",      "models": ["hy4-flash", "deepseek-v4.1-flash"] },
     { "provider": "reverix", "models": ["claude-opus-5-5", "gpt-6.1-sol"] }
   ]
 }
@@ -98,27 +102,27 @@ Stats live in memory only (EWMA + 5-minute failure window), reset on restart, an
 
 ## Capability guard (never let a tiny model fake an agent turn)
 
-A model you *can* call is not necessarily a model that can *do the job*. A local 3B model cannot handle tool calls; forced to, it confidently narrates that it will use the tools while the actual task is already dead. So a provider can declare its limits:
+A model you *can* call is not necessarily a model that can *do the job*. The Devin CLI gateway does not accept tools or streaming, so a provider must be able to declare those limits:
 
 ```json
-"local": {
-  "baseUrl": "http://127.0.0.1:11434/v1",
-  "capabilities": { "tools": false, "stream": true, "maxChars": 6000, "maxMessages": 12, "tiers": ["simple"] }
+"devin": {
+  "baseUrl": "http://127.0.0.1:8790/v1",
+  "capabilities": { "tools": false, "stream": false, "maxChars": 64000, "maxMessages": 100 }
 }
 ```
 
 | Field | Effect |
 |---|---|
-| `tools: false` | requests carrying `tools` skip this provider; logged as `skip=incapable(local:no-tools(19))` |
-| `tiers: ["simple"]` | only serve the listed tiers; `auto` classified as coding/complex never lands here |
+| `tools: false` | requests carrying `tools` skip this provider; logged as `skip=incapable(devin:no-tools(19))` |
+| `tiers: ["simple"]` | only serve the listed tiers; `auto` classified into other tiers never lands here |
 | `maxChars` / `maxMessages` | skip once the conversation exceeds the threshold |
 | `stream: false` | skip streaming requests (non-streaming-only upstreams) |
 
 Three supporting rules:
 
 - **A tool-bearing request is never "simple"**: even if the client explicitly sends `model=simple` or `model=auto`, any request with `tools` is upgraded to `coding` (`guard.upgradeOnTools`, on by default), logged as `upgrade=simple->coding(tools=19)`. A flash model plus 19 tools is just as unreliable.
-- **Borrow the next tier when this tier has no eligible candidate**: not only on retries. When every provider in `simple` is open or blocked by the guard, the router walks `simple→coding→complex→expert` right away for the first capable, un-tripped provider (`borrow=coding`, `x-router-escalate` header set). Capability is evaluated **against the borrowed tier**, so a `simple` request cannot smuggle in the local model that way.
-- **Capability dead end fails immediately**: if filtering leaves zero candidates (e.g. only a local 3B configured, request carries 19 tools), the router returns `400 router_no_capable_model` with `retryable:false` and never touches an upstream. Retrying that shape can never succeed.
+- **Borrow the next tier when this tier has no eligible candidate**: not only on retries. When every provider in `simple` is open or blocked by the guard, the router walks `simple→coding→complex→expert` right away for the first capable, un-tripped provider (`borrow=coding`, `x-router-escalate` header set). Capability is evaluated **against the borrowed tier**.
+- **Capability dead end fails immediately**: if filtering leaves zero candidates (e.g. only providers without tool support are configured but the request carries 19 tools), the router returns `400 router_no_capable_model` with `retryable:false` and never touches an upstream. Retrying that shape can never succeed.
 
 ## Account-level circuit breaker
 
@@ -155,12 +159,12 @@ If nothing is left after the breakpoint, the router escalates immediately instea
 
 ## Other mechanics
 
-- **Dual-mode classifier**: cloud small model (default; walks the inherited route's providers and picks the first non-open one — zero deployment) or local Ollama (fully offline)
+- **Cloud classifier**: walks the inherited route's providers and picks the first non-open one; the active config and example use neither the Ollama classifier nor a local fallback model
 - **Session stickiness**: short follow-ups ("continue / ok") keep the current tier, preserving prompt cache
 - **Tool-intent override**: reminders / email / PDF / screenshots go deterministically to `coding`
 - **Reserve pool**: `reserve` declares cross-provider fallbacks, auto-appended to every chain (providers already present are not re-appended, preserving provider order)
 - **Budget breaker**: per-upstream-host daily limits (`usd` for pay-as-you-go / `requests` for subscriptions); over-limit upstreams are skipped
-- **Hot reload**: saving in the UI takes effect immediately (`/admin/reload`), with automatic backup; API keys are masked and blank fields never overwrite
+- **Hot reload**: the UI writes atomically, backs up the previous config and confirms `/admin/reload` before reporting success. The router also watches `config.json`, applying direct edits or atomic replacements after a 150 ms debounce while retaining the last valid policy if JSON is invalid. The UI reads the latest disk version and asks before restoring an old draft; stale saves are rejected rather than overwriting newer edits. API keys are masked and blank fields never overwrite them. Changing the listening port still requires a restart
 - **One-click agent hookup**: switch Hermes to `model=auto`, or point any other agent's Base URL at the proxy
 
 ## Configuration
@@ -178,7 +182,7 @@ node router/router.mjs
 | `reserve[]` | cross-provider fallback pool appended to every chain |
 | `retryPolicy` | `{ windowMs, escalateAfter, crossTier, tiers[] }` |
 | `breaker` | `{ quotaMs, authMs, rateMs, serverMs, networkMs, modelMs }` |
-| `classifier.mode` | `cloud` (default) or `local` (Ollama) |
+| `classifier.mode` | `cloud` in the active config and example; legacy `local` (Ollama) requires explicit selection |
 | `budgets.<host>` | `{ "usd": 20 }` or `{ "requests": 5000 }` |
 | `upstreamTimeoutMs` | upstream timeout (default 600 s, for slow reasoning models) |
 
@@ -190,6 +194,9 @@ node router/router.mjs
 | `GET /admin/health` | full state: breaker reason/remaining, model cooldowns, chains, recent failures |
 | `GET /admin/plan?route=simple&retry=2` | preview the exact attempt order for a tier and retry count |
 | `POST /admin/breaker/reset` | clear breakers (`{"provider":"ark"}`, omit for all) |
+| `POST /admin/verify` | send a minimal completion to each model in a route's effective chain (`{"route":"simple"}`; optional `tools` / `stream`), report per-model status and write failures back to breaker/model cooldown |
+
+Each tier on the router configuration page has a **Verify chain** button. It verifies the **saved, hot-reloaded runtime configuration**, not an unsaved page draft. Verification calls models in order; after a provider-level failure it skips that provider's remaining models and continues with the next provider. It may consume a small amount of upstream or agent-session quota.
 
 Responses carry `x-router-provider` / `x-router-model` / `x-router-attempts` / `x-router-retry` / `x-router-escalate`; logs emit `route= model= host= ok|FAIL status= kind= scope= retry=` and stay parseable by the usage dashboard.
 
@@ -207,7 +214,16 @@ Runs a local fake upstream covering: provider-level skip of a whole account, mod
 
 The bridge requires Bearer authentication. `GET /health` checks only the listener, **not** CLI authentication or model availability: check `devin models` and make a real completion before prioritizing a model. This machine has verified `swe-2-high` and `swe-2-flash-high` end to end. Map them with `DEVIN_MODEL_MAP='{"swe-2-high":"swe-2-high","swe-2-flash-high":"swe-2-flash-high"}'`; the model-list endpoint only reports configured aliases, not live availability.
 
-On this machine, simple routes use Volcano Ark → Devin SWE-2 Flash High → WorkBuddy → DeepSeek; coding routes use Volcano Ark → Devin SWE-2 High → WorkBuddy → DeepSeek → Reverix. Complex and expert keep their existing Reverix → Devin SWE-2 High → Ark → WorkBuddy → DeepSeek order. This is **not direct model inference**. Each call launches an independent Devin agent session and may consume account quota. It accepts only non-streaming text, not OpenAI tool calls or images. Agent requests requiring tools or streaming must use another provider. Test locally without billing via `node --test devin-proxy/proxy.test.mjs`.
+On this machine, simple routes use Volcano Ark → Trae → Devin SWE-2 Flash High → WorkBuddy → DeepSeek; coding routes use Volcano Ark → Devin SWE-2 High → Trae → WorkBuddy → DeepSeek → Reverix. Complex and expert keep Reverix → Devin SWE-2 High → Ark → Trae → WorkBuddy → DeepSeek. This is **not direct model inference**. Each call launches an independent Devin agent session and may consume account quota. It accepts only non-streaming text, not OpenAI tool calls or images. Agent requests requiring tools or streaming must use another provider. Test locally without billing via `node --test devin-proxy/proxy.test.mjs`.
+
+## Optional upstream: Trae SOLO bridge (trae2api-web)
+
+`trae2api-web` wraps TRAE SOLO's free `solo_work_lite` channel as an OpenAI-compatible API, exposing `/v1/chat/completions` and `/v1/models`. On this machine it runs as launchd service `com.agent-manager-trae2api` on `127.0.0.1:7864`, with a login callback on `127.0.0.1:18080` and a web console at `/admin`; Agent Manager forwards it at `http://127.0.0.1:3100/px/trae/v1`.
+
+- **Account**: complete the TRAE web authorization through `/admin/api/login` or the web console first. `/v1/models` returns the dynamic upstream model list only after at least one account exists under `auths/`. API calls use the service's `TW2A_API_KEY` as the Bearer key.
+- **Capabilities**: streaming and OpenAI `tools` are supported (tool parameter objects are rewritten into the string form SOLO expects); context is conservatively limited with `maxChars:120000`. It still consumes `ide_credits` rather than being unlimited, so quota and rate-limit failures stay under the router's account-level breaker rules.
+- **Placement**: Trae uses `deepseek-v4.1-flash` for both `simple` and `coding` — after Ark and before Devin for `simple`, and after Devin and before WorkBuddy for `coding`. Only `complex` and `expert` use the stronger `glm-5.3` → `kimi-k3`, after Ark. The reserve pool also keeps `deepseek-v4.1-flash` so `glm-5.3` is not appended back to lower tiers. This keeps the strongest paid upstreams first while giving every tier a free streaming/tool-capable fallback.
+- **Source and docs**: `/Users/pingyan/davinproject/trae2api-web` (upstream: <https://github.com/connectedGraph/trae2api-web>); credentials and state live under `~/.agent-manager/trae2api/`.
 
 ## Open-source comparison
 

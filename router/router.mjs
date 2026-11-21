@@ -254,6 +254,7 @@ function trip(pid, cls) {
     openUntil: Math.max(until, prev.openUntil || 0),
     kind: cls.kind,
     scope: cls.scope,
+    model: prev.model || cls.model || '',      // 记录是哪个模型触发的，供探活对齐
     reason: String(cls.text || '').replace(/\s+/g, ' ').slice(0, 300),
     hits: (prev.hits || 0) + 1,
     updated: nowIso(),
@@ -275,6 +276,119 @@ function clearBreaker(pid) {
 const modelCool = new Map(); // pid|model -> until
 function coolModel(pid, model) { modelCool.set(`${pid}|${model}`, Date.now() + CD.model); }
 function modelCooled(pid, model) { const t = modelCool.get(`${pid}|${model}`) || 0; return t > Date.now(); }
+
+// ---------------------------------------------------------------- 熔断自动探活
+// 上游给的「配额重置时间」普遍偏保守（火山一次给 2 小时），熔断期间即使充值到账也
+// 只能干等到点。这里对已熔断的厂商做低频轻量探测：发一发 max_tokens=1 的最小请求，
+// 通了就立刻解除熔断，让流量提前回到这条链上。
+// 两条硬约束：①探测失败绝不延长熔断（不走 trip，只按退避降频）；②鉴权类不探——
+// 它不会自愈，反复打还可能触发账号风控。
+const probeStat = new Map(); // pid -> { fails, lastAt, lastOk, nextAt, lastStatus, lastKind }
+function probeCfg() {
+  const p = CFG.probe || {};
+  return {
+    enabled: p.enabled !== false,
+    everyMs: Math.max(20000, Number(p.everyMs) || 120000),
+    maxBackoffMs: Math.max(60000, Number(p.maxBackoffMs) || 900000),
+    timeoutMs: Math.max(3000, Number(p.timeoutMs) || 20000),
+    kinds: Array.isArray(p.kinds) ? p.kinds : ['quota', 'balance', 'server', 'network', 'rate'],
+  };
+}
+function probeModelFor(pid) {
+  // 只用本厂商的模型：跨厂商借用别家 models 会误判（例如拿 wb 的 deepseek-v4.1-flash
+  // 去探 ark，通了也救不了 ark 自己挂掉的 kimi/doubao）。
+  const p = PROVIDERS[pid];
+  if (p?.models?.length) return p.models[0];
+  for (const r of Object.values(ROUTES)) {
+    for (const g of r.groups || []) if (g.pid === pid && g.models?.length) return g.models[0];
+  }
+  for (const g of RESERVE) if (g.pid === pid && g.models?.length) return g.models[0];
+  return null;
+}
+async function probeProvider(pid, cfg) {
+  const prov = PROVIDERS[pid];
+  const bk = breakers[pid];
+  const model = bk?.model || probeModelFor(pid);
+  const now = Date.now();
+  const prev = probeStat.get(pid) || { fails: 0, lastOk: 0 };
+  const next = { fails: prev.fails || 0, lastAt: now, lastOk: prev.lastOk || 0, nextAt: 0, lastStatus: 0, lastKind: '' };
+  if (!prov || !model) {
+    next.nextAt = now + cfg.maxBackoffMs;
+    probeStat.set(pid, next);
+    return { ok: false, status: 0, skipped: true };
+  }
+  const ctrl = new AbortController();
+  const timer = setTimeout(() => ctrl.abort(), cfg.timeoutMs);
+  let status = 0;
+  let ok = false;
+  let text = '';
+  const t0 = Date.now();
+  try {
+    const r = await fetch(`${prov.baseUrl}/chat/completions`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json', authorization: `Bearer ${prov.apiKey}` },
+      body: JSON.stringify({ model, messages: [{ role: 'user', content: 'ping' }], max_tokens: 1, stream: false }),
+      signal: ctrl.signal,
+    });
+    status = r.status;
+    ok = r.ok;
+    if (!ok) text = (await r.text().catch(() => '')).slice(0, 300);
+  } catch (e) {
+    text = String((e && e.message) || e);
+  }
+  clearTimeout(timer);
+  const ms = Date.now() - t0;
+  next.lastStatus = status;
+  if (ok) {
+    next.fails = 0;
+    next.lastOk = Date.now();
+    next.nextAt = 0;
+    const b = breakers[pid];
+    // 探测单发 ping 可能走进「按请求次数」的较轻配额池而 200，但真实带 tools 的
+    // 请求仍会被「按 token/并发」的配额拒。provider 级熔断不能由 ping 单独解除，
+    // 必须等真流量实际通过；这里只解模型级冷却，把同模型放回去接真实流量。
+    if (b && b.openUntil > Date.now()) {
+      modelCool.delete(`${pid}|${model}`);
+      // 标记探活见过通：resolveSteps 可以据此在 breaker 仍开的情况下再放行一次该厂商
+      next.probedOk = true;
+      console.log(`[router] ${nowIso()} probe=ok provider=${pid} model=${model} ms=${ms} keptBreakerOpen=true note=ping_ok_real_flow_required`);
+    }
+    probeStat.set(pid, next);
+    return { ok: true, status, ms, keptBreakerOpen: !!(b && b.openUntil > Date.now()) };
+  }
+  // 失败：只降频，绝不延长熔断（阈值不变，避免「越探越久」）
+  const cls = classifyFailure(status, text);
+  next.fails = (prev.fails || 0) + 1;
+  next.lastKind = cls.kind;
+  const backoff = Math.min(cfg.maxBackoffMs, cfg.everyMs * 2 ** Math.min(next.fails - 1, 4));
+  next.nextAt = Date.now() + backoff;
+  probeStat.set(pid, next);
+  console.log(`[router] ${nowIso()} probe=fail provider=${pid} model=${model} status=${status} kind=${cls.kind} fails=${next.fails} next=${Math.round(backoff / 1000)}s ms=${ms} ${text.replace(/\s+/g, ' ').slice(0, 120)}`);
+  return { ok: false, status, ms, kind: cls.kind, body: text.slice(0, 300) };
+}
+function probeTargets() {
+  const cfg = probeCfg();
+  if (!cfg.enabled) return [];
+  const now = Date.now();
+  return Object.keys(PROVIDERS).filter((pid) => {
+    const b = breakers[pid];
+    if (!b || !(b.openUntil > now)) return false;
+    if (!cfg.kinds.includes(b.kind || 'server')) return false;
+    const st = probeStat.get(pid);
+    return !st || now >= (st.nextAt || 0);
+  });
+}
+function startProber() {
+  const tick = async () => {
+    const cfg = probeCfg();
+    if (cfg.enabled) for (const pid of probeTargets()) { try { await probeProvider(pid, cfg); } catch { /* 单家探测异常不影响其他 */ } }
+  };
+  const loop = () => {
+    tick().catch(() => {}).finally(() => { const t = setTimeout(loop, Math.max(10000, probeCfg().everyMs / 4)); t.unref?.(); });
+  };
+  const t0 = setTimeout(loop, Math.min(20000, probeCfg().everyMs));
+  t0.unref?.();
+}
 
 // ---------------------------------------------------------------- 重试感知账本
 // key = 会话首条用户消息 + 最后一条用户消息；只有上一轮「失败」才算 retry，避免误判用户复述。
@@ -809,6 +923,13 @@ function resolveSteps(plan, tried, log, ctx) {
   // 厂商熔断：全部熔断时保留一个「半开探测」候选，避免整池冷却导致 400 快速失败
   // （标准熔断器 half-open：长期余额/配额故障也可能在 reset 前恢复，必须留一条探针）
   const open = steps.filter((s) => !breakerOpen(s.pid));
+  // 探活见过通的厂商：追加到链尾当「试一次」候选；如果正常链走通就不浪费这一发，
+  // 如果正常链也挂，probedOk 厂商至少有一次带真实流量验证的机会（通了就自然清熔断）
+  const probedOkExtra = steps.filter((s) => {
+    if (!breakerOpen(s.pid)) return false;
+    const st = probeStat.get(s.pid);
+    return st && st.probedOk && st.lastOk && (Date.now() - st.lastOk) < 600000; // 10 分钟内探活通过
+  });
   let allOpen = false;
   if (!open.length && steps.length) {
     const probe = steps.find((s) => {
@@ -830,6 +951,12 @@ function resolveSteps(plan, tried, log, ctx) {
     if (open.length !== steps.length) log.push(`skip=breaker(${steps.length - open.length})`);
     diag.breaker = steps.length - open.length;
     steps = open;
+  }
+  // 把探活通过的熔断厂商追加到尾（去重，且不带同 pid 重复模型）
+  if (probedOkExtra.length) {
+    const have = new Set(steps.map((s) => `${s.pid}|${s.model}`));
+    for (const s of probedOkExtra) if (!have.has(`${s.pid}|${s.model}`)) { steps.push(s); have.add(`${s.pid}|${s.model}`); }
+    if (probedOkExtra.length) log.push(`probeOk=[${[...new Set(probedOkExtra.map(s=>s.pid))]}]`);
   }
   diag.usable = steps.length;
   return { steps, allOpen, diag };
@@ -1023,6 +1150,7 @@ const server = http.createServer(async (req, res) => {
             leftMs: b && b.openUntil > now ? b.openUntil - now : 0,
             kind: b?.kind || '', reason: b?.reason || '', hits: b?.hits || 0, resetSrc: !!b?.resetSrc,
             modelsCooling: [...modelCool].filter(([k, v]) => k.startsWith(pid + '|') && v > now).map(([k]) => k.slice(pid.length + 1)),
+            probe: probeStat.get(pid) || null,
           };
         }),
         routes: Object.fromEntries(Object.entries(ROUTES).map(([n, r]) => [n, {
@@ -1037,6 +1165,22 @@ const server = http.createServer(async (req, res) => {
         ledger: ledger.size,
         recentFails: recentFails.slice(-12),
       }));
+      return;
+    }
+    // 后台探活：看每家最近一次探测的结果；POST 触发一次“立即探”，不改熔断状态、只更新 probeStat。
+    if (req.method === 'GET' && url.pathname === '/admin/probe') {
+      res.writeHead(200, { 'content-type': 'application/json' });
+      res.end(JSON.stringify({ ok: true, cfg: probeCfg(), items: Object.fromEntries([...probeStat]) }));
+      return;
+    }
+    if (req.method === 'POST' && url.pathname === '/admin/probe') {
+      const raw = await readBody(req).catch(() => Buffer.from('{}'));
+      let pid = '';
+      try { pid = JSON.parse(raw.toString('utf8') || '{}').provider || ''; } catch { /* 忽略 */ }
+      if (!pid || !PROVIDERS[pid]) { res.writeHead(400, { 'content-type': 'application/json' }); res.end(JSON.stringify({ ok: false, error: 'provider_required' })); return; }
+      const r = await probeProvider(pid, probeCfg());
+      res.writeHead(r.ok ? 200 : 502, { 'content-type': 'application/json' });
+      res.end(JSON.stringify({ ok: r.ok, provider: pid, result: r }));
       return;
     }
     if (req.method === 'POST' && url.pathname === '/admin/breaker/reset') {
@@ -1178,12 +1322,12 @@ const server = http.createServer(async (req, res) => {
           const count = (server5xx.get(step.pid) || 0) + 1;
           server5xx.set(step.pid, count);
           if (count >= 2) {
-            trip(step.pid, { ...cls, text: r.body });
+            trip(step.pid, { ...cls, text: r.body, model: step.model });
             providerBlocked.set(step.pid, cls.kind);
             effectiveScope = 'provider';
           }
         } else if (cls.scope === 'provider') {
-          trip(step.pid, { ...cls, text: r.body });
+          trip(step.pid, { ...cls, text: r.body, model: step.model });
           providerBlocked.set(step.pid, cls.kind);
         } else if (cls.scope === 'model') {
           coolModel(step.pid, step.model);
@@ -1316,11 +1460,18 @@ const server = http.createServer(async (req, res) => {
         const step = steps[i];
         const prov = PROVIDERS[step.pid];
         if (!prov) { i++; continue; }
-        // 同一厂商可能在链路里出现多次（如升档后重复），熔断后一律跳过
+        // 同一厂商可能在链路里出现多次（如升档后重复），熔断后一律跳过；
+        // 例外：resolveSteps 把探活通过的厂商追加到尾，那一发必须放行去验证
         if (breakerOpen(step.pid)) {
-          console.log(`[router] ${nowIso()} route=${route} model=${step.model} provider=${step.pid} skip=breaker`);
-          i++;
-          continue;
+          const st = probeStat.get(step.pid);
+          const allow = st && st.probedOk && st.lastOk && (Date.now() - st.lastOk) < 600000
+            && step.model === (breakers[step.pid]?.model || step.model);
+          if (!allow) {
+            console.log(`[router] ${nowIso()} route=${route} model=${step.model} provider=${step.pid} skip=breaker`);
+            i++;
+            continue;
+          }
+          console.log(`[router] ${nowIso()} route=${route} model=${step.model} provider=${step.pid} probeOk→try`);
         }
         const host = hostOf(prov.baseUrl);
         if (budgetExceeded(host)) {
@@ -1438,7 +1589,7 @@ const server = http.createServer(async (req, res) => {
               continue;
             }
           }
-          trip(step.pid, { ...cls, text: r.body });
+          trip(step.pid, { ...cls, text: r.body, model: step.model });
           // 整家跳过：同一厂商剩下的模型不再试
           while (i < steps.length && steps[i].pid === step.pid) i++;
           continue;
@@ -1560,4 +1711,5 @@ const server = http.createServer(async (req, res) => {
 
 server.listen(CFG.port, '127.0.0.1', () => {
   console.log(`[router] v${ROUTER_VERSION} listening on 127.0.0.1:${CFG.port} routes=${Object.keys(ROUTES).join(',')} providers=${Object.keys(PROVIDERS).join(',')}`);
+  startProber();
 });

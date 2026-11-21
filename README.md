@@ -96,10 +96,10 @@ OpenAI 兼容本地代理，分类器判断任务等级后分流：
 |---|---|---|
 | `simple` | 闲聊、问答、翻译 | deepseek-v4.1-flash |
 | `coding` | 写代码、跑命令、MCP 工具调用 | kimi-k3.1-pro |
-| `complex` | 架构设计、复杂分析、规划 | claude-opus-5-5 |
-| `expert` | 手动指定的最高难度任务 | claude-fable-5-2 |
+| `complex` | 规划、复杂任务、验收 | claude-opus-5-5 |
+| `expert` | 高难度难题（可由 auto 自动选择） | claude-fable-5-2 |
 
-云端 / 本地 Ollama 双模式分类器 · 会话粘性 · **厂商分组链路（模型问题换模型、厂商问题换厂商）** · **能力守卫（带工具的请求不落小模型）** · **跨档借用（本档全挂自动用下一档厂商）** · 账号级熔断（余额/配额解析重置时间，限流只冷却 60 秒）· Agent 重试感知自动升档 · 每日预算熔断 · 自定义厂商 · Devin CLI 反代兜底 · 热重载 · Agent 一键接入。→ [详细说明](docs/routing.md)
+云端四档自动分类（本地 Ollama 已禁用）· 会话粘性 · **厂商分组链路（模型问题换模型、厂商问题换厂商）** · **能力守卫（带工具的请求不落小模型）** · **跨档借用（本档全挂自动用下一档厂商）** · 账号级熔断（余额/配额解析重置时间，限流只冷却 60 秒）· Agent 重试感知自动升档 · 每日预算熔断 · 自定义厂商 · Devin CLI / Trae SOLO 反代兜底 · 热重载 · Agent 一键接入。→ [详细说明](docs/routing.md)
 
 <p align="center"><img src="docs/screenshots/router.png" width="760" alt="自动路由面板"/></p>
 
@@ -134,7 +134,6 @@ OpenAI 兼容本地代理，分类器判断任务等级后分流：
 | python3 | agent-bridge MCP server（macOS 自带） |
 | `@samanhappy/mcphub` | MCP 网关（可选，`npm i -g`） |
 | `agent-skill-manager` (asm) | Skill 管理（可选，`npm i -g`） |
-| Ollama（可选） | 本地分类器，`brew install ollama` |
 
 ### 安装
 

@@ -60,8 +60,7 @@
         {
           "provider": "trae",
           "models": [
-            "glm-5-turbo",
-            "DeepSeek-V4-Flash-Official"
+            "deepseek-v4.1-flash"
           ]
         },
         {
@@ -91,8 +90,7 @@
         {
           "provider": "trae",
           "models": [
-            "kimi-k2.7-code",
-            "seed-code-pro-0430"
+            "deepseek-v4.1-flash"
           ]
         },
         {
@@ -129,8 +127,8 @@
         {
           "provider": "trae",
           "models": [
-            "Doubao-Seed-2.1-Pro",
-            "glm-5.3"
+            "glm-5.3",
+            "kimi-k3"
           ]
         }
       ]
@@ -161,7 +159,7 @@
           "provider": "trae",
           "models": [
             "glm-5.3",
-            "DeepSeek-V4-Pro"
+            "kimi-k3"
           ]
         }
       ]
@@ -183,7 +181,7 @@
     {
       "provider": "trae",
       "models": [
-        "glm-5.3"
+        "deepseek-v4.1-flash"
       ]
     }
   ],

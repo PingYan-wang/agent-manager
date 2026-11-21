@@ -14,8 +14,10 @@
 |---|---|---|
 | `simple` | 闲聊、问答、翻译、天气新闻 | deepseek-v4.1-flash |
 | `coding` | 写代码、跑命令、文件操作、MCP 工具调用 | kimi-k3.1-pro |
-| `complex` | 架构设计、复杂分析、规划 | claude-opus-5-5 |
-| `expert` | 手动指定的最高难度任务 | claude-fable-5-2 |
+| `complex` | 架构设计、任务规划、复杂任务及成果验收 | claude-opus-5-5 |
+| `expert` | 高难度难题与研究级推理（也可手动指定） | claude-fable-5-2 |
+
+`model=auto` 会按任务意图选择这四档：简单或一般问题走 `simple`，普通编程走 `coding`，任务规划、复杂任务处理和验收走 `complex`，真正的难题走 `expert`。编排器规划及验收固定使用 `complex`。带工具的请求不会留在 `simple`，至少升到 `coding`；熔断或能力不符时仍按原链路兜底，不会调用已禁用的本地 Ollama。
 
 路由、厂商、链路均可在 UI 中自定义，也可新增路由（如 `fast` / `vision`）。
 
@@ -35,7 +37,9 @@ UI 里的链路是「**厂商下拉 + 模型可搜索输入框**」：点开就�
 "coding": {
   "chain": [
     { "provider": "ark",     "models": ["kimi-k3.1-pro", "doubao-seed-2.1-pro"] },
-    { "provider": "wb",      "models": ["glm-5.3-flash"] },
+    { "provider": "devin",   "models": ["swe-2-high"] },
+    { "provider": "trae",    "models": ["kimi-k2.7-code", "seed-code-pro-0430"] },
+    { "provider": "wb",      "models": ["hy4-flash", "deepseek-v4.1-flash"] },
     { "provider": "reverix", "models": ["claude-opus-5-5", "gpt-6.1-sol"] }
   ]
 }
@@ -98,27 +102,27 @@ Agent 客户端会把上一轮 assistant 的思维链原样回传。这些字段
 
 ## 能力守卫（别让小模型硬答 Agent 请求）
 
-模型能被调用 ≠ 能胜任。本地 3B 这类模型接不了工具调用，硬答的结果是「一本正经地说我要帮你调工具」——看起来有回复，实际整轮任务已经废了。所以厂商可以声明能力边界：
+模型能被调用 ≠ 能胜任。Devin CLI 网关不接受工具或流式请求；若让它硬接这类任务，只会让整轮请求失败。所以厂商可以声明能力边界：
 
 ```json
-"local": {
-  "baseUrl": "http://127.0.0.1:11434/v1",
-  "capabilities": { "tools": false, "stream": true, "maxChars": 6000, "maxMessages": 12, "tiers": ["simple"] }
+"devin": {
+  "baseUrl": "http://127.0.0.1:8790/v1",
+  "capabilities": { "tools": false, "stream": false, "maxChars": 64000, "maxMessages": 100 }
 }
 ```
 
 | 字段 | 作用 |
 |---|---|
-| `tools: false` | 请求带 `tools` 时直接跳过该厂商，日志记 `skip=incapable(local:no-tools(19))` |
-| `tiers: ["simple"]` | 只接指定档位；`auto` 被分类到 coding/complex 时不会落到它身上 |
-| `maxChars` / `maxMessages` | 上下文超过阈值就跳过，避免小模型被长对话压垮 |
+| `tools: false` | 请求带 `tools` 时直接跳过该厂商，日志记 `skip=incapable(devin:no-tools(19))` |
+| `tiers: ["simple"]` | 只接指定档位；`auto` 被分类到其他档位时不会落到它身上 |
+| `maxChars` / `maxMessages` | 上下文超过阈值就跳过 |
 | `stream: false` | 流式请求跳过，用于只支持非流式的上游 |
 
 三条配套规则：
 
 - **带工具的请求不当「简单任务」**：客户端即使显式传 `model=simple` 或 `model=auto`，只要请求里带 `tools`，自动升到 `coding`（`guard.upgradeOnTools`，默认开），日志记 `upgrade=simple->coding(tools=19)`。
-- **本档没有合格候选就借下一档**：不是等到重试才升档。`simple` 的厂商全熔断/全被能力守卫挡掉时，现场按 `simple→coding→complex→expert` 找第一个「有能力且未熔断」的厂商，日志记 `borrow=coding`、响应头带 `x-router-escalate`；借档时能力判定按**借来的那一档**算，不会因为原档位是 simple 就放行本地小模型。
-- **能力死局立刻失败**：过滤完一个候选都不剩（例如只配了本地 3B 却带 19 个工具），直接 `400 router_no_capable_model`，`retryable=false`，不做任何上游尝试。这类请求重试多少次都一样。
+- **本档没有合格候选就借下一档**：不是等到重试才升档。`simple` 的厂商全熔断/全被能力守卫挡掉时，现场按 `simple→coding→complex→expert` 找第一个「有能力且未熔断」的厂商，日志记 `borrow=coding`、响应头带 `x-router-escalate`；借档时能力判定按**借来的那一档**算。
+- **能力死局立刻失败**：过滤完一个候选都不剩（例如只配不支持工具调用的厂商却带 19 个工具），直接 `400 router_no_capable_model`，`retryable=false`，不做任何上游尝试。这类请求重试多少次都一样。
 
 ## 账号级熔断
 
@@ -143,6 +147,16 @@ WorkBuddy / Devin 这类客户端收到 `503 + Retry-After: 30` 会老老实实�
 30 秒的网络型熔断刻意**不**触发快速失败：它是唯一有可能在下一轮恢复的故障，值得让客户端等一次。任一值设为 `0` 可关闭对应规则。
 
 
+## 熔断自动探活
+
+上游给的「配额重置时间」普遍偏保守（火山的 `AccountQuotaExceeded` 一次给 5 小时），充值到账或窗口提前滑过去，客户端仍要干等到 `openUntil`。探活对已熔断的厂商发一发 `max_tokens=1` 的最小请求，用「真实上游响应」而不是「到点猜测」判定恢复：
+
+- **探测目标**：只对 `quota / balance / server / network / rate` 类熔断探活；`auth` 类不会自愈，跳过
+- **模型对齐**：只探 `breakers[pid].model`（即当时触发熔断的那个模型），不拿别家 models 里的同 PID 条目冒名——避免「拿 wb 的 deepseek-v4.1-flash 去探 ark 自家 kimi，ping 通了却救不了」这种假阳性
+- **ping 通 ≠ 解除熔断**：单发 ping 可能走进较轻的配额池而 200，真实带 tools 的请求仍可能 429。所以 `probe=ok` 只解**模型级冷却**并在 `probeStat` 里打 `probedOk` 标记，**provider 级熔断保持**；`resolveSteps` 会把 `probedOk` 厂商追加到链尾当「试一次」候选，让真流量亲自验证（通了自然清熔断，不通就还是熔断状态）
+- **退避**：失败按 `everyMs × 2^fails` 退避（封顶 `maxBackoffMs`），不会越探越勤；探活失败**不延长**熔断（不走 `trip`）
+- **配置**：`probe: { enabled, everyMs=120000, maxBackoffMs=900000, timeoutMs=20000, kinds }`；可用 `GET /admin/probe` 查看、`POST /admin/probe {provider}` 手动触发一发
+
 ## Agent 重试感知
 
 同一会话的同一句请求，在上一次**失败**后的 5 分钟窗口内再次到达，即判定为 Agent 重试：
@@ -156,13 +170,13 @@ WorkBuddy / Devin 这类客户端收到 `503 + Retry-After: 30` 会老老实实�
 
 ## 其它机制
 
-- **分类器双模式**：云端小模型（默认，沿继承路由的厂商顺序挑第一个未熔断的，零部署）或本地 Ollama 小模型（完全离线）
+- **云端分类器**：沿继承路由的厂商顺序挑第一个未熔断的模型；当前配置及示例均不启用 Ollama 分类器或本地兜底模型
 - **会话粘性**：同一会话内的追问（"继续 / 好的 / ok"）不降级，保住 prompt 缓存
 - **工具意图覆盖**：提醒 / 邮件 / PDF / 截图等任务直接确定性路由到 coding
-- **兜底池**：`reserve` 里声明跨厂商保底，自动补到每条链路末尾（已出现过的厂商不重复追加，保证厂商顺序）。**云厂商排在本地小模型之前**——本机 3B 只该做最后一档纯聊天兜底，不应在云端还能用的时候抢答
+- **兜底池**：`reserve` 里声明跨厂商保底，自动补到每条链路末尾（已出现过的厂商不重复追加，保证厂商顺序）；当前仅含云端服务商
 - **能力守卫**：见上文，声明 `capabilities` 的厂商会被自动挡住不合适的请求（工具调用 / 长上下文 / 流式）
 - **预算熔断**：按上游 host 设每日预算（`usd` 按量计费 / `requests` 包月订阅），超限跳过走兜底
-- **热重载**：UI 保存即生效（`/admin/reload`），改动前自动备份；API Key 脱敏显示、留空不覆盖
+- **热重载**：UI 保存会原子写入配置、备份旧版并调用 `/admin/reload`，确认成功才提示生效；路由器也监听 `config.json`，直接编辑或原子替换后约 150 ms 自动应用，无效 JSON 保留上一个可用策略。配置页每次读取磁盘最新版，旧草稿须确认恢复，过期页面保存会提示刷新而非覆盖；API Key 脱敏显示、留空不覆盖。监听端口变更仍须重启路由器
 - **Agent 一键接入**：一键把 Hermes 切到 `model=auto`；其他 Agent 把 Base URL 改为反代入口即可
 
 ## 配置
@@ -182,7 +196,7 @@ node router/router.mjs
 | `guard` | `{ upgradeOnTools, toolsMin, toolsUpgradeTo, fastFailStaleMs, fastFailAfterRetries, fastFailMinWaitMs }` |
 | `retryPolicy` | `{ windowMs, escalateAfter, crossTier, tiers[] }`；`tiers` 即升级链，缺省用路由出现顺序 |
 | `breaker` | `{ quotaMs, authMs, rateMs, serverMs, networkMs, modelMs }` |
-| `classifier.mode` | `cloud`（默认）或 `local`（Ollama） |
+| `classifier.mode` | 当前及示例为 `cloud`；旧版 `local`（Ollama）仅在手动选择时启用 |
 | `budgets.<host>` | `{ "usd": 20 }` 或 `{ "requests": 5000 }` |
 | `upstreamTimeoutMs` | 上游超时（默认 600s，兼容慢速推理模型） |
 
@@ -194,6 +208,9 @@ node router/router.mjs
 | `GET /admin/health` | 完整状态：熔断原因/剩余时间、模型冷却、链路、最近失败 |
 | `GET /admin/plan?route=simple&retry=2` | 预览某档位在指定重试次数下的实际尝试顺序 |
 | `POST /admin/breaker/reset` | 手动解除熔断（`{"provider":"ark"}`，留空=全部） |
+| `POST /admin/verify` | 按某档位有效链路逐个发送最小补全（`{"route":"simple"}`；可选 `tools` / `stream`），返回逐模型状态并把配额、鉴权、模型错误回写熔断/冷却 |
+
+路由配置页每个等级都有「验证链路」按钮，验证的是**已保存并热重载的运行配置**，未保存的页面草稿不参与。验证会顺序调用链路中的每个模型；厂商级失败后跳过同厂商剩余模型、继续下一家，可能消耗少量上游额度或 Agent 会话额度。
 
 响应头会带回本次实际使用的 `x-router-provider` / `x-router-model` / `x-router-attempts` / `x-router-retry` / `x-router-escalate`；日志按 `route= model= host= ok|FAIL status= kind= scope= retry=` 输出，可直接被用量看板解析。
 
@@ -213,10 +230,19 @@ npm run test:router
 - 模型映射：`DEVIN_MODEL_MAP='{"swe-2-high":"swe-2-high","swe-2-flash-high":"swe-2-flash-high"}'`，具体 ID 以本机 `devin models` 输出为准；缺省原样透传
 - 能力声明：`tools:false, stream:false`——CLI 是完整 agent 会话，不接受 OpenAI 工具 schema、不支持 SSE，只适合纯聊天兜底
 - 成本与延迟：每次调用都是一个 Devin agent 会话，可能消耗账号额度、延迟高于普通模型 API；并发默认 2（`DEVIN_PROXY_CONCURRENCY`）
-- 本机路由：simple 为火山 `ark` → Devin `swe-2-flash-high` → WorkBuddy → DeepSeek；coding 为火山 `ark` → Devin `swe-2-high` → WorkBuddy → DeepSeek → Reverix。complex/expert 保留原有 Reverix → Devin `swe-2-high` → 火山 → WorkBuddy → DeepSeek。能力过滤会跳过不适用的 Devin 请求。
+- 本机路由：simple 为火山 `ark` → Trae → Devin `swe-2-flash-high` → WorkBuddy → DeepSeek；coding 为火山 `ark` → Devin `swe-2-high` → Trae → WorkBuddy → DeepSeek → Reverix。complex/expert 保留 Reverix → Devin `swe-2-high` → 火山 → Trae → WorkBuddy → DeepSeek。能力过滤会跳过不适用的 Devin 请求。
 - 本机入口：`http://127.0.0.1:8790/v1`；经 Agent Manager 转发可用 `/px/devin/v1`。调用须带本机配置的 Bearer key，`GET /health` 仅表示进程在线，**不表示 CLI 已登录或模型可用**。先确认 `devin models` 的实际模型 ID，并通过网关发起一次真实补全，再决定是否将它排在火山前面。
 - 这不是模型推理 API：请求转换成一次独立的 CLI Agent 会话，仅支持非流式纯文本；含 OpenAI 工具调用、图片等请求会拒绝，不能作为带工具的 Agent 请求的优先上游。模型列表端点只是配置别名清单，仍须用真实补全验证模型可用性。
 - 离线回归检查：`node --test devin-proxy/proxy.test.mjs`（mock CLI，不消耗 ACU）。
+
+## 可选上游：Trae SOLO 反代（trae2api-web）
+
+`trae2api-web` 把 TRAE SOLO 的 `solo_work_lite` 免费通道包装成 OpenAI 兼容接口，提供 `/v1/chat/completions` 与 `/v1/models`。本机部署为 launchd 服务 `com.agent-manager-trae2api`，主端口 `127.0.0.1:7864`，登录回调端口 `127.0.0.1:18080`，管理面板在 `/admin`；Agent Manager 入口是 `http://127.0.0.1:3100/px/trae/v1`。
+
+- 账号：先用 `/admin/api/login` 或 Web 面板完成 TRAE 网页授权；`auths/` 里至少有一个账号后，`/v1/models` 才会拉取动态模型清单。API 调用使用服务的 `TW2A_API_KEY` 做 Bearer 鉴权。
+- 能力：支持流式与 OpenAI `tools`（会把参数对象改写成 SOLO 需要的字符串）；上下文按 `maxChars:120000` 保守限制。它仍消耗 `ide_credits`，不是无限免费，配额/限流交给路由器的账号级熔断处理。
+- 本机位置：simple/coding 的 Trae 统一用 `deepseek-v4.1-flash`；simple 排在火山后、Devin 前，coding 排在 Devin 后、WorkBuddy 前。complex/expert 才用更强的 `glm-5.3` → `kimi-k3`，都排在火山后。reserve 也保留 `deepseek-v4.1-flash`，不会把 glm-5.3 追加回低档位。这样既不挤占前两强上游，又给每个档位保留一个可流式、可带工具的免费兜底。
+- 源码与说明：`/Users/pingyan/davinproject/trae2api-web`（上游：<https://github.com/connectedGraph/trae2api-web>）；凭证与状态在 `~/.agent-manager/trae2api/`。
 
 ## 开源方案对照
 

@@ -452,6 +452,7 @@
         <h3>已检测到的 Agent · MCP / Skill 清单</h3>
         <button class="ghost" style="margin-left:auto" onclick="loadAgents()">↻ 重新扫描</button>
       </div>
+      <div id="provHealth" style="margin-bottom:14px"></div>
       <div id="agentList"><div class="empty">扫描中…</div></div>
     </div>
   </section>
@@ -745,7 +746,67 @@ const fold = (key, label, count, inner, open) => `
     <div class="fold-body"><div class="fold-inner">${inner}</div></div>
   </div>`;
 
+// ---------- 厂商健康卡（路由页之外的轻量提醒） ----------
+const PROV_HINT = {
+  quota:    '配额耗尽，可去控制台调高或等重置；下方「立即探活」可提前召回',
+  balance:  '账户欠费，充值后点「立即探活」立即恢复，不用等熔断自然到期',
+  auth:     'API Key 失效或鉴权被拒，先修凭证再恢复',
+  server:   '上游 5xx / 网关抖动，router 已自动探活，恢复即自动回归',
+  network:  '网络不通，检查代理 / 直连连通性',
+  rate:     '触发了 RPM/TPM 限流，稍等或错峰',
+  model:    '该模型被上游下线或拒识，换可用模型',
+};
+async function renderProvHealth(){
+  const box = $('#provHealth');
+  if(!box) return;
+  const d = await api('/api/router/health').catch(()=>null);
+  if(!d || !d.providers){ box.innerHTML=''; return; }
+  const down = d.providers.filter(p=>p.open || (p.probe && p.probe.lastStatus >= 500 && !p.probe.lastOk));
+  const up   = d.providers.length - down.length;
+  const rows = down.map(p=>{
+    const kind = p.kind || (p.probe && p.probe.lastKind) || 'server';
+    const left = p.leftMs ? rcFmtLeft(p.leftMs) : '';
+    const next = p.probe && p.probe.nextAt ? Math.max(0, Math.round((p.probe.nextAt - Date.now())/1000)) : null;
+    const lastMs = p.probe && p.probe.lastAt ? new Date(p.probe.lastAt).toLocaleTimeString('zh-CN',{hour12:false}) : '';
+    return `<tr>
+      <td><strong>${esc(p.id)}</strong> <span class="muted">${esc(p.label||'')}</span></td>
+      <td><span class="badge off">${RC_KIND_CN[kind]||kind||'熔断'}</span></td>
+      <td class="muted">${esc((p.reason||'').slice(0,80))}</td>
+      <td>${left?`<span class="muted">剩 ${left}</span>`:'<span class="muted">—</span>'}</td>
+      <td class="muted">${next!=null?`${next}s 后再探`:(lastMs?`上次 ${lastMs}`:'—')}</td>
+      <td><button class="ghost sm" data-act="prov-probe" data-p="${p.id}">立即探活</button>
+          <button class="ghost sm" data-act="prov-reset" data-p="${p.id}">解除熔断</button></td>
+    </tr>`;
+  }).join('');
+  box.innerHTML = `
+    <div class="card" style="margin:0;border-color:${down.length?'var(--warn,#b45309)':'var(--border)'}">
+      <div class="toolbar" style="margin-bottom:8px">
+        <h3 style="margin:0">模型厂商健康</h3>
+        <span class="badge ${up?'on':''}">${up} 可用</span>
+        ${down.length?`<span class="badge off">${down.length} 熔断</span>`:''}
+        <button class="ghost sm" style="margin-left:auto" onclick="renderProvHealth()">↻</button>
+      </div>
+      ${down.length?`
+        <table class="mini-table"><tr><th>厂商</th><th>状态</th><th>原因</th><th>熔断剩余</th><th>自动探活</th><th></th></tr>${rows}</table>
+        <div class="muted" style="margin-top:6px;font-size:12px">
+          ${down.map(p=>`<div>· ${esc(p.id)}：${PROV_HINT[p.kind]||PROV_HINT.server}</div>`).join('')}
+        </div>`:'<div class="empty">全部在线</div>'}
+    </div>`;
+}
+async function provProbe(pid){
+  toast('探测 '+pid+' …');
+  const r = await api('/api/router/probe',{method:'POST',body:{provider:pid}}).catch(e=>null);
+  if(r&&r.ok) toast(pid+' 已恢复，熔断解除');
+  else toast(pid+' 仍不可用'+(r&&r.result&&r.result.status?` (${r.result.status})`:''), true);
+  renderProvHealth();
+}
+async function provReset(pid){
+  const r = await api('/api/router/breaker/reset',{method:'POST',body:{provider:pid}});
+  if(r&&r.ok){ toast('已解除 '+pid+' 熔断'); renderProvHealth(); } else toast('解除失败',true);
+}
+
 async function loadAgents(){
+  renderProvHealth();
   const r = await api('/api/agents');
   const list = r.agents||[];
   const gw = r.gateway || {};
@@ -1588,6 +1649,8 @@ document.addEventListener('click', e => {
   if(act==='skill-inspect'){ skillInspect(d.name); return; }
   if(act==='skill-toggle'){ skillToggle(d.name, d.disabled==='true'); return; }
   if(act==='skill-uninstall'){ skillUninstall(d.name); return; }
+  if(act==='prov-probe'){ provProbe(d.p); return; }
+  if(act==='prov-reset'){ provReset(d.p); return; }
   if(act==='orch-sel'){ orchSelId = d.id; orchChatTask=null; orchSelNodeId=null; loadOrch(); return; }
   if(act==='orch-view'){ orchView=d.view||'chat'; const id=orchChatTask||orchSelId; if(id) renderOrchDetail(id,false); else renderOrchTree(null); return; }
   if(act==='orch-tree-toggle'){

@@ -671,7 +671,7 @@ const scheduleBootstrap = (agents) => {
 async function writeFileSafe(fp, content) {
   await mkdir(path.dirname(fp), { recursive: true });
   const tmp = `${fp}.tmp-${process.pid}-${Date.now()}`;
-  await writeFile(tmp, content, 'utf8');
+  await writeFile(tmp, content, { encoding: 'utf8', mode: 0o600 });
   await rename(tmp, fp);
 }
 
@@ -791,6 +791,7 @@ const PROXY_DEFAULTS = [
   { id: 'ollama', name: 'Ollama', prefix: '/px/ollama', target: 'http://127.0.0.1:11434', enabled: true },
   { id: 'wb-rl', name: 'WorkBuddy·RL项目', prefix: '/px/wb-rl', target: 'http://127.0.0.1:8787', enabled: true },
   { id: 'wb-app', name: 'WorkBuddy App', prefix: '/px/wb-app', target: 'http://127.0.0.1:61213', enabled: false },
+  { id: 'trae', name: 'Trae SOLO API', prefix: '/px/trae', target: 'http://127.0.0.1:7864', enabled: true, llmRouter: true, note: 'trae2api-web：TRAE SOLO OpenAI 兼容入口（Bearer 鉴权；支持流式与工具）' },
 ];
 
 let proxyEntries = [];
@@ -1002,7 +1003,7 @@ const routerMgmtRoutes = [
     const old = current?.config || {};
     incoming = mergeConfigKeys(incoming, old);
     await mkdir(ROUTER_DIR, { recursive: true });
-    await writeFile(ROUTER_CFG + '.bak-' + Date.now(), JSON.stringify(old, null, 2));
+    await writeFile(ROUTER_CFG + '.bak-' + Date.now(), JSON.stringify(old, null, 2), { mode: 0o600 });
     const savedText = JSON.stringify(incoming, null, 2);
     await writeFileSafe(ROUTER_CFG, savedText);
     MODEL_CACHE.clear(); // 厂商地址/密钥变了，模型清单缓存作废
@@ -1612,6 +1613,50 @@ const routes = [...routerMgmtRoutes,
         signal: AbortSignal.timeout(4000),
       });
       return json(res, r.status, await r.json());
+    } catch (e) {
+      return json(res, 500, { ok: false, error: String((e && e.message) || e) });
+    }
+  }],
+  ['POST', /^\/api\/router\/probe$/, async (req, res, body) => {
+    const provider = String((body || {}).provider || '');
+    try {
+      const r = await fetch('http://127.0.0.1:8788/admin/probe', {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify(provider ? { provider } : {}),
+        signal: AbortSignal.timeout(30000),
+      });
+      return json(res, r.status, await r.json());
+    } catch (e) {
+      return json(res, 500, { ok: false, error: String((e && e.message) || e) });
+    }
+  }],
+  ['GET', /^\/api\/router\/probe$/, async (req, res) => {
+    try {
+      const r = await fetch('http://127.0.0.1:8788/admin/probe', { signal: AbortSignal.timeout(4000) });
+      return json(res, 200, await r.json());
+    } catch (e) {
+      return json(res, 500, { ok: false, error: String((e && e.message) || e) });
+    }
+  }],
+  ['POST', /^\/api\/router\/verify$/, async (req, res, body) => {
+    const route = String((body || {}).route || '').trim();
+    if (!/^[A-Za-z0-9._-]{1,64}$/.test(route)) return json(res, 400, { error: '非法 route' });
+    try {
+      const r = await fetch('http://127.0.0.1:8788/admin/verify', {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({
+          route,
+          tools: Math.max(0, Number(body.tools) || 0),
+          stream: !!body.stream,
+          timeoutMs: body.timeoutMs,
+          totalTimeoutMs: body.totalTimeoutMs,
+        }),
+        signal: AbortSignal.timeout(360000),
+      });
+      const text = await r.text();
+      return json(res, r.status, tryJson(text) || { error: text.slice(0, 500) });
     } catch (e) {
       return json(res, 500, { ok: false, error: String((e && e.message) || e) });
     }
