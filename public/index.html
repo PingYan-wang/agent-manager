@@ -351,7 +351,7 @@
   .oi-dot.running{animation:pulse 1.2s ease-in-out infinite}
   #cmdkBtn{margin-left:12px;font-family:var(--mono);font-size:11px}
 </style>
-<script src="/lib/deep-chat.js" defer></script>
+<script src="/lib/deep-chat.js" type="module"></script>
 </head>
 <body>
 <header>
@@ -567,6 +567,11 @@ Dashboard:  http://localhost:3000  (账号见 MCPHub Dashboard)
 
 <div class="modal-mask" id="modal"><div class="modal" id="modalBox"></div></div>
 <div id="toast"></div>
+<div class="cmdk-mask" id="cmdkMask" onclick="cmdkClose()"></div>
+<div class="cmdk" id="cmdk">
+  <div class="cmdk-input"><span>⌘K</span><input id="cmdkInput" placeholder="搜索命令、页面、任务操作…" autocomplete="off"></div>
+  <div class="cmdk-list" id="cmdkList"></div>
+</div>
 
 <script>
 const $ = s => document.querySelector(s);
@@ -1882,10 +1887,5 @@ function proxyQuickAdd(port, proc){
 hubHealth(); loadAgents();
 setInterval(hubHealth, 30000);
 </script>
-<div class="cmdk-mask" id="cmdkMask" onclick="cmdkClose()"></div>
-<div class="cmdk" id="cmdk">
-  <div class="cmdk-input"><span>⌘K</span><input id="cmdkInput" placeholder="搜索命令、页面、任务操作…" autocomplete="off"></div>
-  <div class="cmdk-list" id="cmdkList"></div>
-</div>
 </body>
 </html>
