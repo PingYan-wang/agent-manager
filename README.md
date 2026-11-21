@@ -1,6 +1,29 @@
-# Agent Manager
+<p align="center">
+  <img src="docs/assets/hero.png" alt="Agent Manager" width="880"/>
+</p>
 
-**本机多 Agent 统一管理 + LLM 智能路由网关**（macOS · 中文 Web UI · 零依赖 Node.js）
+<h1 align="center">Agent Manager</h1>
+
+<p align="center"><b>本机多 Agent 统一管理 + LLM 智能路由网关</b>（macOS · 中文 Web UI · 零依赖 Node.js）</p>
+
+<p align="center">
+  <img src="https://img.shields.io/badge/license-MIT-blue" alt="license"/>
+  <img src="https://img.shields.io/badge/node-%E2%89%A518-brightgreen" alt="node"/>
+  <img src="https://img.shields.io/badge/platform-macOS-lightgrey" alt="platform"/>
+  <img src="https://img.shields.io/badge/UI-%E4%B8%AD%E6%96%87-red" alt="ui"/>
+</p>
+
+<table>
+<tr><td align="center" width="25%">
+<b>🧭 智能路由</b><br/>按任务分级分流，简单走便宜模型，复杂才上旗舰
+</td><td align="center" width="25%">
+<b>🔀 统一反代</b><br/>一个入口聚合所有 Agent 与 LLM 上游，SSE 流式透传
+</td><td align="center" width="25%">
+<b>🎼 任务编排</b><br/>拆解→子 Agent 执行→验收返工→人工裁决→自动续步
+</td><td align="center" width="25%">
+<b>💰 成本可控</b><br/>预算熔断 + 用量下钻 + 每日巡检日报，花费全透明
+</td></tr>
+</table>
 
 > 一句话：让你电脑上所有 AI Agent（Hermes / WorkBuddy / Codex / Devin / Windsurf / Claude …）共用一套 MCP、Skill 和模型路由——**简单问题走便宜模型，复杂任务才上贵模型，每一分钱花在刀刃上**。
 
@@ -16,22 +39,9 @@
 
 Agent Manager 用一个本地 Web 面板把这些全部收拢：
 
-```
-┌─────────────────────────────────────────────────────────┐
-│                    Agent Manager :3100                   │
-│  ┌──────────┐ ┌──────────┐ ┌──────────┐ ┌────────────┐  │
-│  │ 自动路由  │ │  反向代理  │ │ 任务编排  │ │ MCP/Skill │  │
-│  │ 分级分流  │ │ 统一入口  │ │ 拆解验收  │ │  统一同步  │  │
-│  └────┬─────┘ └────┬─────┘ └────┬─────┘ └─────┬──────┘  │
-└───────┼────────────┼────────────┼─────────────┼─────────┘
-        │            │            │             │
-   ┌────▼────┐  ┌────▼────┐  ┌────▼─────┐  ┌────▼─────┐
-   │ 各 LLM  │  │ 本地Agent│  │ 子Agent  │  │ MCPHub   │
-   │ 上游    │  │ 服务    │  │ hermes/  │  │ 网关:3000│
-   │ 火山/   │  │ hermes/ │  │ codex/   │  │ 共享工具 │
-   │ Reverix │  │ mcphub… │  │ devin    │  │          │
-   └─────────┘  └─────────┘  └──────────┘  └──────────┘
-```
+
+![Agent Manager 架构图](docs/assets/architecture.png)
+
 
 ---
 
