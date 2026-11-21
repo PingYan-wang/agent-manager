@@ -107,7 +107,7 @@ launchd 守护 Web UI / MCPHub / 看门狗 / 凭据同步 / 健康监控，全�
 ### 安装
 
 ```bash
-git clone <repo> agent-manager && cd agent-manager
+git clone https://github.com/PingYan-wang/agent-manager.git && cd agent-manager
 ./install.sh            # 检查依赖、生成 config.json、安装 launchd 服务
 ```
 
