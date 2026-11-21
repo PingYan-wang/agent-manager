@@ -29,6 +29,8 @@ const CONCURRENCY = Math.max(1, Number(process.env.DEVIN_PROXY_CONCURRENCY || 2)
 let MODEL_MAP = {};
 try { MODEL_MAP = JSON.parse(process.env.DEVIN_MODEL_MAP || '{}'); } catch { /* 忽略非法 JSON，走透传 */ }
 
+if (!KEY) throw new Error('DEVIN_PROXY_KEY is required');
+if (HOST !== '127.0.0.1' && HOST !== '::1') throw new Error('Devin proxy must bind to loopback');
 fs.mkdirSync(WORK_DIR, { recursive: true });
 
 function log(...args) { console.log(new Date().toISOString(), ...args); }
@@ -39,13 +41,11 @@ function stripAnsi(s) {
 }
 
 function flattenMessages(messages) {
+  if (!Array.isArray(messages) || !messages.length) return null;
   const lines = [];
-  for (const m of Array.isArray(messages) ? messages : []) {
-    const role = m?.role || 'user';
-    let content = m?.content;
-    if (Array.isArray(content)) content = content.map((c) => (typeof c === 'string' ? c : c?.text || '')).join('\n');
-    if (content == null) continue;
-    lines.push(`[${role}]\n${String(content).trim()}`);
+  for (const m of messages) {
+    if (!m || !['system', 'developer', 'user', 'assistant'].includes(m.role) || typeof m.content !== 'string') return null;
+    lines.push(`[${m.role}]\n${m.content.trim()}`);
   }
   return lines.join('\n\n');
 }
@@ -115,7 +115,6 @@ function sendJson(res, status, body) {
 }
 
 function authorized(req) {
-  if (!KEY) return true; // 未配置 key 时仅本机可用（绑定 127.0.0.1）
   const h = req.headers.authorization || '';
   return h === `Bearer ${KEY}`;
 }
@@ -147,9 +146,15 @@ const server = http.createServer(async (req, res) => {
     let body;
     try { body = JSON.parse(raw || '{}'); } catch { return sendJson(res, 400, { error: { message: 'invalid JSON' } }); }
     if (body.stream) return sendJson(res, 400, { error: { message: 'stream not supported; set stream=false', type: 'invalid_request_error' } });
+    if (body.tools?.length || body.tool_choice && body.tool_choice !== 'none') {
+      return sendJson(res, 400, { error: { message: 'OpenAI tool calling is not supported by the Devin CLI bridge', type: 'invalid_request_error' } });
+    }
     const model = String(body.model || 'default');
+    if (Object.keys(MODEL_MAP).length && !Object.hasOwn(MODEL_MAP, model)) {
+      return sendJson(res, 400, { error: { message: 'model is not configured', type: 'invalid_request_error' } });
+    }
     const prompt = flattenMessages(body.messages);
-    if (!prompt.trim()) return sendJson(res, 400, { error: { message: 'messages empty', type: 'invalid_request_error' } });
+    if (!prompt?.trim()) return sendJson(res, 400, { error: { message: 'only non-empty text messages are supported', type: 'invalid_request_error' } });
 
     try {
       await acquire();

@@ -214,6 +214,9 @@ npm run test:router
 - 能力声明：`tools:false, stream:false`——CLI 是完整 agent 会话，不接受 OpenAI 工具 schema、不支持 SSE，只适合纯聊天兜底
 - 成本与延迟：每次调用都是一个 Devin agent 会话（消耗 ACU、分钟级），仅作兜底；并发默认 2（`DEVIN_PROXY_CONCURRENCY`）
 - 路由配置：`providers` 加 `devin`（见 config.example.json），在 coding / complex / expert 链路 reverix 之后插入 `{ "provider": "devin", "models": ["devin-opus","devin-gpt","devin-gemini"] }`
+- 本机入口：`http://127.0.0.1:8790/v1`；经 Agent Manager 转发可用 `/px/devin/v1`。调用须带本机配置的 Bearer key，`GET /health` 仅表示进程在线，**不表示 CLI 已登录或模型可用**。先运行 `devin auth status` 和 `devin models`，确认账号和实际模型 ID，再决定是否将它排在火山前面。
+- 这不是模型推理 API：请求转换成一次独立的 CLI Agent 会话，仅支持非流式纯文本；含 OpenAI 工具调用、图片等请求会拒绝，不能作为带工具的 Agent 请求的优先上游。`SWE-2-High` 不能凭名称推断已开放，必须在 `devin models` 中确认后映射。
+- 离线回归检查：`node --test devin-proxy/proxy.test.mjs`（mock CLI，不消耗 ACU）。
 
 ## 开源方案对照
 

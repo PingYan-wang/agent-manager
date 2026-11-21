@@ -201,6 +201,14 @@ npm run test:router
 
 Runs a local fake upstream covering: provider-level skip of a whole account, model-level switch, parameter self-heal, fast-fail on bad requests, retry escalation, and all-breakers-open fast fail.
 
+## Optional upstream: Devin CLI bridge
+
+`devin-proxy/proxy.mjs` wraps a one-shot `devin -p --model ...` agent session as a limited OpenAI-compatible endpoint. Start it with `DEVIN_PROXY_KEY=<random-key> node devin-proxy/proxy.mjs`; it binds to `127.0.0.1:8790` only. The local Base URL is `http://127.0.0.1:8790/v1`; Agent Manager can forward it at `/px/devin/v1`.
+
+The bridge requires Bearer authentication. `GET /health` checks only the listener, **not** CLI authentication or model availability: run `devin auth status` and `devin models` before configuring a model mapping or moving this upstream ahead of another provider. `SWE-2-High` must be verified in the account's actual model list; it is not implied by an arbitrary alias.
+
+This is **not direct model inference**. Each call launches an independent Devin agent session and consumes ACUs. It accepts only non-streaming text, not OpenAI tool calls or images. Agent requests requiring tools or streaming must use another provider. Test locally without billing via `node --test devin-proxy/proxy.test.mjs`.
+
 ## Open-source comparison
 
 Projects this router was measured against, and what was adopted:
