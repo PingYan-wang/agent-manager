@@ -29,6 +29,19 @@
 - **分叉** = 子 Agent 执行的各个步骤，实时显示 执行中 / 重试中 / 完成 / 失败 / 待裁决
 - 点击任一节点展开详情：执行实例、尝试次数、失败原因
 
+## 递归拆解
+
+借鉴苏格拉底式「拆到能执行为止，再逐层往回整合」：当子 Agent 判断某步骤过于复杂、无法一次完成时，可在输出首行写 `<<<SPLIT>>>`，随后用 JSON 给出 2–6 个更小的子步骤：
+
+```json
+{"steps":[{"title":"调研 X","prompt":"自包含提示词","agent":"hermes"}]}
+```
+
+- 子步骤作为**下一层子 Agent** 递归执行，执行树上父步骤显示为「已拆解」，子步骤挂在其下
+- 全部子步骤完成后**自动合并回父步骤**（逐层整合）；任一子步骤失败则父步骤标记失败
+- 拆解深度由 `maxDepth` 限制（默认 2 层），超限忽略拆解请求，防止无限递归
+- 「计划」视图可查看全部步骤、依赖关系与完成进度
+
 ## 失败自愈
 
 子 Agent 失败时自动分类并处理：
@@ -43,7 +56,7 @@
 
 ## 配置项
 
-`enabled` · `crossClient` · `workerClient` · `autoContinue` · `maxContinuations` · `maxConcurrent` · `maxRepairs` · `tickSeconds` · `dispatchTimeoutMs`——均可在「编排设置」抽屉中即时修改。
+`enabled` · `crossClient` · `workerClient` · `autoContinue` · `maxContinuations` · `maxConcurrent` · `maxRepairs` · `maxDepth` · `tickSeconds` · `dispatchTimeoutMs`——均可在「编排设置」抽屉中即时修改。
 
 ## API
 
