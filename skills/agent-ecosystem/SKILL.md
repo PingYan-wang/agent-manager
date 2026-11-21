@@ -47,6 +47,21 @@ description: 本机 Agent 生态系统的统一能力入口。当用户提到其
 
 共享记忆库：`~/.agent-manager/memory.jsonl`（追加写，按 agent/tag 可过滤）。注意控制写入频率，只存值得长期复用的结论，不要把过程日志当记忆写。
 
+### REST 直调（无 MCP 客户端时）
+
+bridge 同时以 `http://127.0.0.1:3199` 提供免鉴权 REST（仅本机），一行 curl 即可，**不需要 MCP 握手和 token**：
+
+```bash
+curl -s "http://127.0.0.1:3199/search?q=关键词&limit=10"          # 跨 Agent 会话搜索（result 是 JSON 字符串）
+curl -s "http://127.0.0.1:3199/conversations?agent=hermes&limit=20"
+curl -s "http://127.0.0.1:3199/conversation?agent=devin&id=history_xxx"
+curl -s "http://127.0.0.1:3199/memory/search?q=关键词"
+curl -s -X POST "http://127.0.0.1:3199/memory/save" -H 'Content-Type: application/json' \
+  -d '{"agent":"devin","title":"...","content":"...","tags":["..."]}'
+```
+
+响应统一为 `{"ok":true,"result":"<JSON 或文本>"}`，`result` 字段需要再 `JSON.parse` 一次。launchd 服务 `com.agent-bridge` KeepAlive 自愈。
+
 数据覆盖：hermes/devin/codex 有完整会话内容（codex 读 `~/.codex/sessions` 的 rollout 文件）；workbuddy 只有任务元数据；claude/cursor/windsurf/gemini 无本地会话存储。
 
 ## 4. 任务编排器（长程任务 / 子 Agent）

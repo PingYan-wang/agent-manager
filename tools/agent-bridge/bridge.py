@@ -481,7 +481,81 @@ def _text(t):
 def _err(t):
     return {"content": [{"type": "text", "text": t}], "isError": True}
 
+def http_main(port):
+    """REST 模式：无 MCP 握手/鉴权的本机直调，给没有 MCP 客户端的 Agent 用。
+    GET  /agents /conversations?agent=&limit= /conversation?agent=&id=&max_chars=
+         /search?q=&agent=&limit= /memory/search?q=&agent=&limit=
+    POST /memory/save  {"agent","title","content","tags"}
+    """
+    from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+    from urllib.parse import urlparse, parse_qs
+
+    class H(BaseHTTPRequestHandler):
+        def _send(self, code, obj):
+            body = json.dumps(obj, ensure_ascii=False).encode()
+            self.send_response(code)
+            self.send_header("Content-Type", "application/json; charset=utf-8")
+            self.send_header("Content-Length", str(len(body)))
+            self.end_headers()
+            self.wfile.write(body)
+
+        def _tool(self, name, args):
+            r = dispatch("tools/call", {"name": name, "arguments": args}) or {}
+            txt = r["content"][0]["text"] if r.get("content") else ""
+            self._send(400 if r.get("isError") else 200, {"ok": not r.get("isError"), "result": txt})
+
+        def do_GET(self):
+            u = urlparse(self.path)
+            q = {k: v[0] for k, v in parse_qs(u.query).items()}
+            p = u.path.rstrip("/") or "/"
+            try:
+                if p in ("/", "/health"):
+                    return self._send(200, {"ok": True, "service": "agent-bridge",
+                        "endpoints": ["/agents", "/conversations", "/conversation", "/search", "/memory/search", "POST /memory/save"]})
+                if p == "/agents":
+                    return self._tool("agents_list", {})
+                if p == "/conversations":
+                    return self._tool("conversations_list", {"agent": q.get("agent", ""), "limit": int(q.get("limit", 20))})
+                if p == "/conversation":
+                    return self._tool("conversation_read", {"agent": q.get("agent", ""), "id": q.get("id", ""),
+                                                            "max_chars": int(q.get("max_chars", MAX_CHARS))})
+                if p == "/search":
+                    return self._tool("conversations_search", {"query": q.get("q", ""), "agent": q.get("agent", ""),
+                                                               "limit": int(q.get("limit", 10))})
+                if p == "/memory/search":
+                    return self._tool("memory_search", {"query": q.get("q", ""), "agent": q.get("agent", ""),
+                                                        "limit": int(q.get("limit", 10))})
+                return self._send(404, {"error": "not found"})
+            except Exception as e:
+                return self._send(500, {"error": str(e)})
+
+        def do_POST(self):
+            p = urlparse(self.path).path.rstrip("/") or "/"
+            if p != "/memory/save":
+                return self._send(404, {"error": "not found"})
+            try:
+                n = int(self.headers.get("Content-Length") or 0)
+                args = json.loads(self.rfile.read(n) or b"{}")
+            except Exception as e:
+                return self._send(400, {"error": "bad json: " + str(e)})
+            self._tool("memory_save", args if isinstance(args, dict) else {})
+
+        def log_message(self, *a):
+            pass
+
+    srv = ThreadingHTTPServer(("127.0.0.1", port), H)
+    print(f"agent-bridge http listening on http://127.0.0.1:{port}", flush=True)
+    srv.serve_forever()
+
+
 def main():
+    args = sys.argv[1:]
+    if "--http" in args:
+        port = 3199
+        if "--port" in args:
+            port = int(args[args.index("--port") + 1])
+        http_main(port)
+        return
     for line in sys.stdin:
         line = line.strip()
         if not line:
