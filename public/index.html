@@ -1,0 +1,658 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Agent Manager — MCP & Skills 统一管理</title>
+<style>
+  :root{
+    --bg:#f6f3ec; --surface:#fdfcf8; --surface2:#f3efe6;
+    --ink:#211d19; --muted:#7d7468; --faint:#b3aa9c;
+    --line:#e4ddd0; --line-strong:#cfc6b4;
+    --accent:#b23c1a; --accent-soft:rgba(178,60,26,.08); --accent-line:rgba(178,60,26,.35);
+    --ok:#3e7c4f; --warn:#a8741a; --danger:#a83226;
+    --serif:"Songti SC","STSong","Noto Serif SC","Source Han Serif SC",serif;
+    --mono:ui-monospace,"SF Mono","JetBrains Mono",Menlo,Consolas,monospace;
+    --sans:-apple-system,"PingFang SC","Hiragino Sans GB","Microsoft YaHei",sans-serif;
+    --r-sm:5px; --r-md:9px; --r-lg:14px;
+    --ease:cubic-bezier(.16,1,.3,1);
+  }
+  *{box-sizing:border-box;margin:0;padding:0}
+  html{color-scheme:light}
+  body{
+    background:var(--bg); color:var(--ink); font:13.5px/1.7 var(--sans);
+    font-variant-numeric:tabular-nums;
+    background-image:
+      radial-gradient(60rem 36rem at 85% -20%, rgba(178,60,26,.05), transparent 60%),
+      radial-gradient(50rem 30rem at -10% 110%, rgba(62,124,79,.05), transparent 55%);
+    min-height:100vh;
+  }
+  ::selection{background:rgba(178,60,26,.18)}
+  button{font-family:inherit}
+  :focus-visible{outline:2px solid var(--accent);outline-offset:2px;border-radius:3px}
+
+  header{
+    display:flex;align-items:center;gap:18px;padding:0 32px;height:60px;
+    border-bottom:1px solid var(--line);background:rgba(253,252,248,.88);
+    backdrop-filter:blur(10px);position:sticky;top:0;z-index:20;
+  }
+  .logo{display:flex;align-items:baseline;gap:10px;font-family:var(--serif);font-size:17px;letter-spacing:.02em}
+  .logo b{font-weight:700}
+  .logo span{color:var(--accent);font-size:13px;letter-spacing:.28em;font-family:var(--sans);font-weight:600}
+  .logo i{font-style:normal;color:var(--faint);font-size:10.5px;letter-spacing:.14em;font-family:var(--mono)}
+  .status{display:flex;align-items:center;gap:8px;font-size:11.5px;color:var(--muted);letter-spacing:.03em}
+  .dot{width:7px;height:7px;border-radius:50%;background:var(--danger);flex:none}
+  .dot.on{background:var(--ok)}
+  nav{display:flex;gap:2px;margin-left:auto}
+  nav button{
+    background:transparent;border:none;color:var(--muted);
+    padding:8px 13px;border-radius:var(--r-sm);cursor:pointer;font-size:13px;
+    transition:color .15s;position:relative;
+  }
+  nav button:hover{color:var(--ink)}
+  nav button.active{color:var(--ink);font-weight:600}
+  nav button.active::after{content:"";position:absolute;left:13px;right:13px;bottom:2px;height:2px;background:var(--accent)}
+
+  main{max-width:1220px;margin:0 auto;padding:30px 32px 70px}
+  section{animation:fadeUp .4s var(--ease) both}
+  @keyframes fadeUp{from{opacity:0;transform:translateY(10px)}to{opacity:1;transform:none}}
+  @media (prefers-reduced-motion:reduce){section{animation:none}}
+
+  .card{
+    background:var(--surface);border:1px solid var(--line);border-radius:var(--r-lg);
+    padding:20px 22px;margin-bottom:20px;
+    box-shadow:0 1px 2px rgba(33,29,25,.04),0 8px 24px -16px rgba(33,29,25,.12);
+  }
+  .card>h3{font-family:var(--serif);font-size:15px;font-weight:600;letter-spacing:.04em;margin-bottom:14px}
+  .toolbar{display:flex;gap:8px;align-items:center;margin-bottom:14px;flex-wrap:wrap}
+  .toolbar h3{margin:0}
+
+  input,select,textarea{
+    background:var(--surface);border:1px solid var(--line-strong);color:var(--ink);
+    border-radius:var(--r-sm);padding:7px 11px;font-size:12.5px;
+    outline:none;transition:border-color .15s,box-shadow .15s;
+  }
+  input:focus,select:focus,textarea:focus{border-color:var(--accent);box-shadow:0 0 0 3px var(--accent-soft)}
+  textarea{font-family:var(--mono);font-size:12px;resize:vertical}
+
+  button.btn{
+    background:var(--ink);color:var(--surface);border:none;padding:7px 16px;border-radius:var(--r-sm);
+    font-weight:600;font-size:12.5px;cursor:pointer;
+    transition:background .15s,transform .1s;
+  }
+  button.btn:hover{background:var(--accent)}
+  button.btn:active{transform:translateY(1px)}
+  button.btn:disabled{opacity:.45;cursor:default}
+  button.ghost{
+    background:transparent;border:1px solid var(--line-strong);color:var(--muted);
+    padding:6px 12px;border-radius:var(--r-sm);cursor:pointer;font-size:12px;
+    transition:color .15s,border-color .15s,background .15s;
+  }
+  button.ghost:hover{color:var(--accent);border-color:var(--accent-line);background:var(--accent-soft)}
+  button.danger{color:var(--danger)}
+  button.danger:hover{color:var(--danger);border-color:rgba(168,50,38,.4);background:rgba(168,50,38,.06)}
+
+  table{width:100%;border-collapse:collapse;font-size:12.5px}
+  th{
+    text-align:left;color:var(--faint);font-weight:500;padding:8px 10px;
+    border-bottom:1px solid var(--line-strong);white-space:nowrap;
+    font-size:11px;letter-spacing:.06em;
+  }
+  td{padding:10px;border-bottom:1px solid var(--line);vertical-align:middle}
+  tr:last-child td{border-bottom:none}
+  tbody tr{transition:background .12s}
+  tbody tr:hover{background:rgba(33,29,25,.02)}
+  .name{font-weight:600;color:var(--ink);font-size:12.5px;letter-spacing:.01em}
+  .badge{
+    display:inline-flex;align-items:center;gap:5px;padding:2px 9px;border-radius:20px;
+    font-size:11px;letter-spacing:.02em;
+    border:1px solid var(--line-strong);color:var(--muted);background:var(--surface2);white-space:nowrap;
+  }
+  .badge::before{content:"";width:5px;height:5px;border-radius:50%;background:currentColor;opacity:.65}
+  .badge.on{color:var(--ok);border-color:rgba(62,124,79,.4)}
+  .badge.off{color:var(--faint)}
+  .badge.warn{color:var(--warn);border-color:rgba(168,116,26,.4)}
+  .desc{color:var(--muted);font-size:11.5px;max-width:540px;word-break:break-all;line-height:1.55}
+  .empty{text-align:center;color:var(--faint);padding:44px 0;font-size:12px;letter-spacing:.04em}
+  .muted{color:var(--muted);font-size:11.5px}
+  code,.mono{font-family:var(--mono)}
+
+  /* ---- Agent 卡片 ---- */
+  .agent-grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(360px,1fr));gap:14px}
+  .agent-card{
+    background:var(--surface);border:1px solid var(--line);border-radius:var(--r-md);
+    padding:16px 18px;transition:border-color .2s,box-shadow .2s;
+  }
+  .agent-card:hover{border-color:var(--line-strong);box-shadow:0 4px 16px -8px rgba(33,29,25,.15)}
+  .agent-card.disabled{opacity:.45}
+  .agent-head{display:flex;align-items:center;gap:9px;margin-bottom:4px}
+  .agent-head .name{font-family:var(--serif);font-size:14.5px;font-weight:600;letter-spacing:.03em}
+  .agent-head .cnt{margin-left:auto;font-family:var(--mono);font-size:10.5px;color:var(--faint);letter-spacing:.04em}
+
+  .fold{border-top:1px solid var(--line);margin-top:10px}
+  .fold:first-of-type{border-top:none}
+  .fold-head{
+    display:flex;align-items:center;gap:8px;width:100%;padding:9px 2px;
+    background:none;border:none;color:var(--muted);cursor:pointer;
+    font-size:11.5px;letter-spacing:.08em;
+    transition:color .15s;
+  }
+  .fold-head:hover{color:var(--ink)}
+  .fold-head .n{
+    margin-left:auto;font-family:var(--mono);font-size:10.5px;color:var(--faint);
+    border:1px solid var(--line);border-radius:20px;padding:1px 8px;letter-spacing:.02em;background:var(--surface2);
+  }
+  .fold-head .chev{transition:transform .25s var(--ease);color:var(--faint);font-size:9px}
+  .fold.open .fold-head .chev{transform:rotate(90deg);color:var(--accent)}
+  .fold.open .fold-head .n{color:var(--accent);border-color:var(--accent-line)}
+  .fold-body{display:grid;grid-template-rows:0fr;transition:grid-template-rows .28s var(--ease)}
+  .fold.open .fold-body{grid-template-rows:1fr}
+  .fold-inner{overflow:hidden;min-height:0}
+  .mini-table{width:100%;border-collapse:collapse;font-size:11.5px;margin:2px 0 8px}
+  .mini-table td{padding:5px 4px;border-bottom:1px solid var(--line);color:var(--ink)}
+  .mini-table tr:last-child td{border-bottom:none}
+  .mini-table th{padding:4px;font-size:10.5px;letter-spacing:.06em;color:var(--faint);font-weight:500;text-align:left}
+  .mini-table .path{font-family:var(--mono);font-size:10.5px;color:var(--muted);word-break:break-all}
+
+  /* ---- 弹窗 ---- */
+  .modal-mask{position:fixed;inset:0;background:rgba(33,29,25,.4);backdrop-filter:blur(4px);display:none;align-items:center;justify-content:center;z-index:50}
+  .modal-mask.show{display:flex;animation:fadeUp .2s var(--ease)}
+  .modal{
+    background:var(--surface);border:1px solid var(--line-strong);border-radius:var(--r-lg);
+    padding:26px;width:min(680px,94vw);max-height:88vh;overflow:auto;
+    box-shadow:0 24px 64px -16px rgba(33,29,25,.35);
+  }
+  .modal h3{margin-bottom:14px;font-family:var(--serif);font-size:16px;font-weight:600;letter-spacing:.03em}
+  .modal label{display:block;font-size:11px;color:var(--muted);margin:12px 0 5px;letter-spacing:.05em}
+  .modal input,.modal select,.modal textarea{width:100%}
+  .modal .row{display:flex;gap:10px}.modal .row>*{flex:1}
+  .modal .actions{display:flex;justify-content:flex-end;gap:10px;margin-top:20px}
+  .modal .check{display:flex;align-items:center;gap:8px;margin-top:12px;font-size:12px;color:var(--muted)}
+  .modal .check input{width:auto}
+
+  #toast{position:fixed;bottom:26px;left:50%;transform:translateX(-50%);display:flex;flex-direction:column;gap:8px;z-index:99;align-items:center}
+  .toast{
+    background:var(--ink);color:var(--surface);
+    padding:10px 20px;border-radius:var(--r-sm);font-size:12.5px;
+    box-shadow:0 12px 40px -8px rgba(33,29,25,.4);animation:toastIn .3s var(--ease);
+    display:flex;align-items:center;gap:8px;max-width:82vw;
+  }
+  .toast::before{content:"";width:6px;height:6px;border-radius:50%;background:var(--accent);flex:none}
+  .toast.err::before{background:var(--danger)}
+  @keyframes toastIn{from{opacity:0;transform:translateY(10px)}to{opacity:1;transform:none}}
+  pre{
+    background:var(--surface2);border:1px solid var(--line);border-radius:var(--r-sm);
+    padding:12px;font-family:var(--mono);font-size:11.5px;overflow:auto;max-height:320px;
+    white-space:pre-wrap;word-break:break-all;color:var(--muted);line-height:1.65;
+  }
+  .switch{position:relative;width:34px;height:19px;display:inline-block;flex:none}
+  .switch input{opacity:0;width:0;height:0;position:absolute}
+  .switch .sl{position:absolute;inset:0;background:#ddd5c6;border:1px solid var(--line-strong);border-radius:20px;transition:.2s;cursor:pointer}
+  .switch .sl:before{content:"";position:absolute;width:13px;height:13px;left:2px;top:2px;background:var(--surface);border-radius:50%;transition:.2s var(--ease);box-shadow:0 1px 2px rgba(0,0,0,.15)}
+  .switch input:checked+.sl{background:var(--accent)}
+  .switch input:checked+.sl:before{transform:translateX(15px)}
+  .switch input:focus-visible+.sl{outline:2px solid var(--accent);outline-offset:2px}
+</style>
+</head>
+<body>
+<header>
+  <div class="logo"><b>AGENT</b><span>MANAGER</span><i>v1.0</i></div>
+  <div class="status"><span class="dot" id="hubDot"></span><span id="hubText">MCPHub 连接中…</span></div>
+  <nav>
+    <button data-tab="agents" class="active">Agent 体检</button>
+    <button data-tab="mcp">MCP 服务</button>
+    <button data-tab="skills">已安装 Skills</button>
+    <button data-tab="market">Skills 市场</button>
+    <button data-tab="orch">任务编排</button>
+  </nav>
+</header>
+<main>
+  <section id="tab-agents">
+    <div class="card">
+      <div class="toolbar">
+        <h3>已检测到的 Agent · MCP / Skill 清单</h3>
+        <button class="ghost" style="margin-left:auto" onclick="loadAgents()">↻ 重新扫描</button>
+      </div>
+      <div id="agentList"><div class="empty">扫描中…</div></div>
+    </div>
+  </section>
+
+  <section id="tab-mcp" style="display:none">
+    <div class="card">
+      <div class="toolbar">
+        <button class="btn" onclick="openServerForm()">+ 添加 MCP 服务</button>
+        <button class="ghost" onclick="syncMcp()">⟳ 从各 Agent 同步 MCP</button>
+        <button class="ghost" onclick="loadServers()">刷新</button>
+        <span class="muted" id="mcpCount" style="margin-left:auto"></span>
+      </div>
+      <div id="serverList"><div class="empty">加载中…</div></div>
+    </div>
+    <div class="card">
+      <h3>接入方式 · 各 Agent 统一指向网关</h3>
+      <pre>MCP 端点: http://localhost:3000/mcp
+Dashboard:  http://localhost:3000  (账号见 MCPHub Dashboard)
+已配置: Codex · Devin · Windsurf</pre>
+    </div>
+  </section>
+
+  <section id="tab-skills" style="display:none">
+    <div class="card">
+      <div class="toolbar">
+        <button class="btn" onclick="openInstallModal()">+ 安装 / 导入 Skill</button>
+        <button class="ghost" onclick="syncAll()">⟳ 同步全部 skill 到所有 agent</button>
+        <button class="ghost" onclick="loadSkills()">刷新</button>
+        <span class="muted" id="skillCount" style="margin-left:auto"></span>
+      </div>
+      <div id="skillList"><div class="empty">加载中…</div></div>
+    </div>
+  </section>
+
+  <section id="tab-market" style="display:none">
+    <div class="card">
+      <div class="toolbar">
+        <select id="searchSrc"><option value="asm">asm 索引</option><option value="sh">skills.sh</option></select>
+        <input id="skillSearch" placeholder="搜索 skill，如 playwright、code-review…" style="flex:1;min-width:240px" onkeydown="if(event.key==='Enter')searchSkills()">
+        <button class="btn" onclick="searchSkills()">搜索</button>
+      </div>
+      <div id="marketList"><div class="empty">输入关键词搜索社区 skill</div></div>
+    </div>
+  </section>
+
+  <section id="tab-orch" style="display:none">
+    <div class="card">
+      <div class="toolbar"><h3>编排开关</h3></div>
+      <div id="orchConfig"><div class="empty">加载中…</div></div>
+    </div>
+    <div class="card">
+      <div class="toolbar">
+        <h3>新建任务</h3>
+        <button class="ghost" style="margin-left:auto" onclick="loadOrch()">↻ 刷新</button>
+      </div>
+      <div style="display:flex;gap:8px;flex-wrap:wrap">
+        <input id="orchGoal" placeholder="任务目标，例如：调研并实现 XX 功能，直至验收" style="flex:3;min-width:280px">
+        <input id="orchWorkdir" placeholder="工作目录(可选)" style="flex:1;min-width:180px">
+        <button class="btn" onclick="orchCreate()">创建任务</button>
+      </div>
+      <div class="muted" style="margin-top:6px;font-size:11px">任务会自动拆解→派发子 Agent→验收→(可选)自动规划下一步优化。子 Agent 当前可用: Hermes；Codex/Devin 需先登录各自 CLI。</div>
+    </div>
+    <div class="card">
+      <div class="toolbar"><h3>任务列表</h3><span class="muted" id="orchCount" style="margin-left:auto"></span></div>
+      <div id="orchList"><div class="empty">暂无任务</div></div>
+    </div>
+  </section>
+</main>
+
+<div class="modal-mask" id="modal"><div class="modal" id="modalBox"></div></div>
+<div id="toast"></div>
+
+<script>
+const $ = s => document.querySelector(s);
+const api = async (path, opt={}) => {
+  const r = await fetch(path, { headers:{'Content-Type':'application/json'}, ...opt, body: opt.body ? JSON.stringify(opt.body) : undefined });
+  return r.json();
+};
+const esc = s => String(s??'').replace(/[&<>"]/g, c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]));
+const toast = (msg, err) => {
+  const t = document.createElement('div'); t.className='toast'+(err?' err':''); t.textContent=msg;
+  $('#toast').appendChild(t); setTimeout(()=>t.remove(), 4500);
+};
+const modal = html => { $('#modalBox').innerHTML = html; $('#modal').classList.add('show'); };
+const closeModal = () => $('#modal').classList.remove('show');
+$('#modal').addEventListener('click', e => { if(e.target.id==='modal') closeModal(); });
+
+document.querySelectorAll('nav button').forEach(b => b.onclick = () => {
+  document.querySelectorAll('nav button').forEach(x=>x.classList.remove('active'));
+  b.classList.add('active');
+  ['agents','mcp','skills','market','orch'].forEach(t => $('#tab-'+t).style.display = t===b.dataset.tab?'':'none');
+  if(b.dataset.tab==='agents') loadAgents();
+  if(b.dataset.tab==='mcp') loadServers();
+  if(b.dataset.tab==='skills') loadSkills();
+  if(b.dataset.tab==='orch') loadOrch();
+});
+
+// ---------- Agent 体检 ----------
+const fold = (key, label, count, inner, open) => `
+  <div class="fold${open?' open':''}" data-fold="${key}">
+    <button class="fold-head" type="button"><span class="chev">▶</span>${label}<span class="n">${count}</span></button>
+    <div class="fold-body"><div class="fold-inner">${inner}</div></div>
+  </div>`;
+
+async function loadAgents(){
+  const r = await api('/api/agents');
+  const list = r.agents||[];
+  $('#agentList').innerHTML = '<div class="agent-grid">' + list.map(a=>{
+    const mcpInner = a.mcpServers.length ? `<table class="mini-table"><tr><th>名称</th><th>类型</th><th>地址/命令</th><th></th></tr>` + a.mcpServers.map(s=>`
+      <tr><td class="mono">${esc(s.name)}${s.disabled?' <span class="badge off">禁用</span>':''}</td>
+      <td><span class="badge">${esc(s.transport||s.kind)}</span></td>
+      <td class="path">${esc(s.url||[s.command,(s.args||[]).join(' ')].filter(Boolean).join(' '))}</td>
+      <td>${s.kind==='http'&&!s.disabled?`<button class="ghost" data-act="import-mcp" data-agent="${a.id}" data-name="${esc(s.name)}">导入</button>`:''}</td></tr>`).join('') + '</table>'
+      : '<div class="muted" style="padding:6px 2px">未检测到 MCP 配置</div>';
+    const skillInner = a.skills.length ? `<table class="mini-table"><tr><th>名称</th><th>路径</th><th></th></tr>` + a.skills.map(s=>`
+      <tr><td class="mono">${esc(s.name)}${s.via==='import'?' <span class="badge">导入</span>':''}</td>
+      <td class="path">${esc(s.path)}</td>
+      <td style="white-space:nowrap">
+        <button class="ghost" data-act="link-skill" data-path="${esc(s.path)}" data-agent="${a.name}">链接</button>
+        <button class="ghost" data-act="copy-skill" data-path="${esc(s.path)}" data-agent="${a.name}">复制</button>
+      </td></tr>`).join('') + '</table>'
+      : '<div class="muted" style="padding:6px 2px">未检测到 skill</div>';
+    return `<div class="agent-card ${a.installed?'':'disabled'}">
+      <div class="agent-head"><span class="name">${esc(a.name)}</span>
+        ${a.installed?'<span class="badge on">已安装</span>':'<span class="badge off">未安装</span>'}
+        <span class="cnt">${a.mcpServers.length} MCP · ${a.skills.length} SKILL</span></div>
+      ${fold('m'+a.id,'MCP Servers',a.mcpServers.length,mcpInner,a.mcpServers.length<=3)}
+      ${fold('s'+a.id,'Skills',a.skills.length,skillInner,a.skills.length<=3)}
+      ${!a.mcpServers.length&&!a.skills.length?'<div class="muted">该 agent 暂无 MCP / skill 配置</div>':''}
+    </div>`;
+  }).join('') + '</div>';
+}
+
+// ---------- MCP ----------
+async function hubHealth(){
+  const r = await api('/api/mcp/health');
+  $('#hubDot').className = 'dot'+(r.ok?' on':'');
+  $('#hubText').textContent = r.ok ? 'MCPHub 已连接' : 'MCPHub 未连接';
+}
+async function loadServers(){
+  const r = await api('/api/mcp/servers');
+  const list = r.data || r.allServers || [];
+  $('#mcpCount').textContent = `${list.length} 个服务`;
+  if(!list.length){ $('#serverList').innerHTML='<div class="empty">暂无 MCP 服务 — 点击「添加」或「从各 Agent 同步」</div>'; return; }
+  $('#serverList').innerHTML = '<table><tbody><tr><th>名称</th><th>状态</th><th>类型</th><th>工具</th><th>启用</th><th>操作</th></tr>' + list.map(s=>{
+    const tools = (s.tools||[]).length;
+    const st = s.status || (s.enabled===false?'disabled':'unknown');
+    const stCls = st==='connected'||st==='ready'?'on':(st==='error'?'warn':'');
+    return `<tr>
+      <td><div class="name">${esc(s.name)}</div><div class="desc">${esc(s.description||'')}</div></td>
+      <td><span class="badge ${stCls}">${esc(st)}</span>${s.error?`<div class="desc">${esc(String(s.error).slice(0,150))}</div>`:''}</td>
+      <td><span class="badge">${esc(s.type||s.transport||'stdio')}</span></td>
+      <td class="mono">${tools ? tools : '<span class="muted">—</span>'}</td>
+      <td><label class="switch"><input type="checkbox" ${s.enabled!==false?'checked':''} data-act="srv-toggle" data-name="${esc(s.name)}" data-enabled="${s.enabled!==false}"><span class="sl"></span></label></td>
+      <td style="white-space:nowrap">
+        <button class="ghost" data-act="srv-reload" data-name="${esc(s.name)}">重载</button>
+        <button class="ghost" data-act="srv-edit" data-name="${esc(s.name)}">编辑</button>
+        <button class="ghost danger" data-act="srv-del" data-name="${esc(s.name)}">删除</button>
+      </td></tr>`;
+  }).join('') + '</tbody></table>';
+}
+async function srvToggle(name, enabled){
+  const r = await api(`/api/mcp/servers/${encodeURIComponent(name)}/toggle`, {method:'POST', body:{enabled:!enabled}});
+  toast(r.success===false?'操作失败: '+(r.message||''):'已'+(enabled?'禁用':'启用')+' '+name, r.success===false);
+  loadServers();
+}
+async function srvReload(name){
+  const r = await api(`/api/mcp/servers/${encodeURIComponent(name)}/reload`, {method:'POST', body:{}});
+  toast(r.success===false?'重载失败':'已重载 '+name, r.success===false); loadServers();
+}
+async function srvDel(name){
+  if(!confirm(`确定删除 MCP 服务「${name}」？`)) return;
+  const r = await api(`/api/mcp/servers/${encodeURIComponent(name)}`, {method:'DELETE'});
+  toast(r.success===false?'删除失败: '+(r.message||''):'已删除 '+name, r.success===false); loadServers();
+}
+async function syncMcp(){
+  toast('正在扫描并同步…');
+  const r = await api('/api/mcp/sync-all', {method:'POST', body:{}});
+  if(r.error){ toast('同步失败: '+r.error, true); return; }
+  const {imported=[],skipped=[],failed=[]} = r;
+  modal(`<h3>MCP 同步结果</h3>
+    <p class="muted" style="margin-bottom:8px">导入 <b style="color:var(--ok)">${imported.length}</b> 个，跳过 ${skipped.length} 个，失败 ${failed.length} 个</p>
+    ${imported.length?`<label>已导入</label><pre>${esc(imported.join('\n'))}</pre>`:''}
+    ${failed.length?`<label>失败</label><pre>${esc(failed.join('\n'))}</pre>`:''}
+    ${skipped.length?`<label>跳过</label><pre>${esc(skipped.join('\n'))}</pre>`:''}
+    <div class="actions"><button class="ghost" onclick="closeModal()">关闭</button></div>`);
+  loadServers();
+}
+function serverFormHtml(s){
+  const cfg = (s&&(s.config||s))||{};
+  const isHttp = cfg.url || cfg.serverUrl;
+  return `<h3>${s?'编辑':'添加'} MCP 服务</h3>
+  <label>名称</label><input id="f_name" value="${esc(s?s.name:'')}" ${s?'disabled':''}>
+  <label>类型</label><select id="f_type"><option value="stdio" ${!isHttp?'selected':''}>stdio（本地命令）</option><option value="streamable-http" ${isHttp?'selected':''}>Streamable HTTP（远程 URL）</option><option value="sse">SSE</option></select>
+  <div id="f_stdio" ${isHttp?'style="display:none"':''}>
+    <div class="row"><div><label>命令</label><input id="f_cmd" value="${esc(cfg.command||'')}"></div>
+    <div><label>参数（空格分隔）</label><input id="f_args" value="${esc((cfg.args||[]).join(' '))}"></div></div>
+  </div>
+  <div id="f_http" ${isHttp?'':'style="display:none"'}><label>URL</label><input id="f_url" value="${esc(cfg.url||cfg.serverUrl||'')}"></div>
+  <label>环境变量（JSON，可选）</label><textarea id="f_env" rows="2" placeholder='{"API_KEY":"..."}'>${esc(JSON.stringify(cfg.env||{}))}</textarea>
+  <label>高级：完整配置 JSON（填写后以上字段被忽略）</label><textarea id="f_raw" rows="4" placeholder='{"type":"stdio","command":"npx","args":["-y","xxx"]}'></textarea>
+  <div class="actions"><button class="ghost" onclick="closeModal()">取消</button><button class="btn" onclick="saveServer(${s?1:0})">保存</button></div>`;
+}
+async function openServerForm(){ modal(serverFormHtml(null)); syncType(); }
+async function srvEdit(name){
+  const r = await api('/api/mcp/settings');
+  const srv=(r.data?.mcpServers||{})[name];
+  modal(serverFormHtml({name, config:srv||{}})); syncType();
+}
+function syncType(){
+  const t=$('#f_type').value;
+  $('#f_stdio').style.display = t==='stdio'?'':'none';
+  $('#f_http').style.display = t==='stdio'?'none':'';
+}
+document.addEventListener('change', e=>{ if(e.target.id==='f_type') syncType(); });
+async function saveServer(isEdit){
+  const name=$('#f_name').value.trim();
+  const raw=$('#f_raw').value.trim();
+  let config;
+  if(raw){ try{ config=JSON.parse(raw); }catch{ toast('高级 JSON 格式错误',true); return; } }
+  else{
+    const type=$('#f_type').value;
+    let env={}; try{ env=JSON.parse($('#f_env').value||'{}'); }catch{ toast('环境变量 JSON 格式错误',true); return; }
+    if(type==='stdio'){
+      config={type:'stdio', command:$('#f_cmd').value.trim(), args:$('#f_args').value.trim()?$('#f_args').value.trim().split(/\s+/):[], ...(Object.keys(env).length?{env}:{})};
+    }else{
+      config={type, url:$('#f_url').value.trim(), ...(Object.keys(env).length?{env}:{})};
+    }
+  }
+  const r = isEdit
+    ? await api(`/api/mcp/servers/${encodeURIComponent(name)}`, {method:'PUT', body:{config}})
+    : await api('/api/mcp/servers', {method:'POST', body:{name, config}});
+  if(r.success===false){ toast('保存失败: '+(r.message||JSON.stringify(r)),true); return; }
+  toast('已保存 '+name); closeModal(); loadServers();
+}
+
+// ---------- Skills ----------
+async function loadSkills(){
+  const r = await api('/api/skills');
+  const raw = r.skills||[];
+  // asm 按安装目标重复记录同一 skill，按名字（忽略大小写）去重合并来源/作用域
+  const groups = new Map();
+  for(const s of raw){
+    const key = (s.name||'').toLowerCase();
+    if(!groups.has(key)) groups.set(key, []);
+    groups.get(key).push(s);
+  }
+  const list = [...groups.values()].map(g=>{
+    const providers = [...new Set(g.map(s=>s.providerLabel||s.provider||'').filter(Boolean))];
+    const scopes = [...new Set(g.map(s=>s.scope||'').filter(Boolean))];
+    // 优先展示未禁用条目
+    const main = g.find(s=>!s.disabled) || g[0];
+    return {...main, providerLabel: providers.join(' / ')||main.providerLabel, scope: scopes.join(' / ')||main.scope, _count: g.length};
+  });
+  $('#skillCount').textContent = `${list.length} 个`;
+  if(!list.length){ $('#skillList').innerHTML='<div class="empty">暂无已安装 skill — 点「安装 / 导入」或去「Agent 体检」链接本机 skill</div>'; return; }
+  $('#skillList').innerHTML = '<table><tbody><tr><th>名称</th><th>版本</th><th>来源/作用域</th><th>描述</th><th>操作</th></tr>' + list.map(s=>`
+    <tr><td><div class="name">${esc(s.name)}</div>${s.disabled?'<span class="badge off">已禁用</span>':''}${s._count>1?`<span class="badge">×${s._count} 安装点</span>`:''}</td>
+    <td class="mono">${esc(s.version||'—')}</td>
+    <td><span class="badge">${esc(s.providerLabel||'')}</span><span class="badge">${esc(s.scope||'')}</span></td>
+    <td class="desc">${esc((s.description||'').slice(0,120))}</td>
+    <td style="white-space:nowrap">
+      <button class="ghost" data-act="skill-inspect" data-name="${esc(s.name)}">详情</button>
+      <button class="ghost" data-act="skill-toggle" data-name="${esc(s.name)}" data-disabled="${!!s.disabled}">${s.disabled?'启用':'禁用'}</button>
+      <button class="ghost danger" data-act="skill-uninstall" data-name="${esc(s.name)}">卸载</button>
+    </td></tr>`).join('')+'</tbody></table>';
+}
+async function skillToggle(name, disabled){
+  const action = disabled?'enable':'disable';
+  const r = await api(`/api/skills/${action}`, {method:'POST', body:{name}});
+  toast(r.code===0?`已${disabled?'启用':'禁用'} ${name}`:'操作失败: '+((r.stderr||'').slice(0,120)||r.error||''), r.code!==0);
+  loadSkills();
+}
+async function skillUninstall(name){
+  if(!confirm(`确定卸载 skill「${name}」？`)) return;
+  const r = await api('/api/skills/uninstall', {method:'POST', body:{name}});
+  toast(r.code===0?`已卸载 ${name}`:'卸载失败: '+((r.stderr||r.stdout||'').slice(-200)), r.code!==0);
+  loadSkills();
+}
+async function skillInspect(name){
+  const r = await api('/api/skills/inspect?name='+encodeURIComponent(name));
+  modal(`<h3>Skill 详情 · ${esc(name)}</h3><pre>${esc(JSON.stringify(r,null,2).slice(0,4000))}</pre><div class="actions"><button class="ghost" onclick="closeModal()">关闭</button></div>`);
+}
+
+// ---------- 安装 / 导入弹窗 ----------
+let localSkillsCache = null;
+async function getLocalSkills(){
+  if(localSkillsCache) return localSkillsCache;
+  const r = await api('/api/skills/local');
+  localSkillsCache = r.skills||[];
+  return localSkillsCache;
+}
+async function openInstallModal(prefill, linkDefault){
+  const locals = await getLocalSkills();
+  const opts = locals.map(s=>`<option value="${esc(s.path)}">${esc(s.name)} — ${esc(s.agentName)}</option>`).join('');
+  modal(`<h3>安装 / 导入 Skill</h3>
+    <label>从本机已安装 skill 导入</label>
+    <select id="i_local"><option value="">— 手动填写来源 —</option>${opts}</select>
+    <label>来源</label>
+    <input id="i_source" value="${esc(prefill||'')}" placeholder="skill 名 / author/name / github:owner/repo / URL / 本地路径">
+    <div class="row">
+      <div><label>安装到</label><select id="i_tool"><option value="all">所有 agent</option><option value="codex">Codex</option><option value="claude">Claude</option><option value="agents">Agents</option></select></div>
+      <div><label>作用域</label><select id="i_scope"><option value="global">global</option><option value="project">project</option></select></div>
+    </div>
+    <label class="check"><input type="checkbox" id="i_link" ${linkDefault?'checked':''}> 链接模式（symlink，源目录改动即时生效）</label>
+    <div class="muted" style="margin-top:10px">skills.sh 条目会映射为 github:source:skills/id，可手动修正路径。</div>
+    <div class="actions"><button class="ghost" onclick="closeModal()">取消</button><button class="btn" id="i_go" onclick="doInstall()">安装</button></div>`);
+  $('#i_local').onchange = e => { if(e.target.value) $('#i_source').value = e.target.value; };
+}
+async function doInstall(){
+  const source = $('#i_source').value.trim();
+  if(!source){ toast('请填写来源',true); return; }
+  const link = $('#i_link').checked;
+  const tool = $('#i_tool').value;
+  $('#i_go').disabled = true; $('#i_go').textContent='执行中…';
+  const r = link
+    ? await api('/api/skills/import-path', {method:'POST', body:{path:source, tool: tool==='all'?'agents':tool, link:true}})
+    : await api('/api/skills/install', {method:'POST', body:{source, tool, scope:$('#i_scope').value}});
+  $('#i_go').disabled=false; $('#i_go').textContent='安装';
+  if(r.code===0){ toast('完成，正在同步到所有 agent…'); closeModal(); localSkillsCache=null; loadSkills(); loadAgents(); syncAll(); }
+  else modal(`<h3>执行结果</h3><pre>${esc(((r.stderr||'')+(r.stdout||'')||(r.error||JSON.stringify(r)))).slice(-3000)}</pre><div class="actions"><button class="ghost" onclick="closeModal()">关闭</button></div>`);
+}
+async function syncAll(){
+  toast('正在同步…');
+  const r = await api('/api/skills/sync-all', {method:'POST', body:{}});
+  if(r.error){ toast('同步失败: '+r.error, true); return; }
+  modal(`<h3>Skill 同步完成</h3>
+    <p class="muted" style="margin-bottom:8px">${r.sources} 个来源 × ${r.targets} 个目录 — 新建 <b style="color:var(--ok)">${r.created.length}</b>，跳过 ${r.skipped}${r.errors.length?`，失败 ${r.errors.length}`:''}</p>
+    ${r.errors.length?`<pre>${esc(r.errors.join('\n'))}</pre>`:''}
+    <div class="actions"><button class="ghost" onclick="closeModal()">关闭</button></div>`);
+  loadSkills(); loadAgents();
+}
+function agentSkillAction(path, agentName, link){ openInstallModal(path, link); }
+
+// ---------- 市场 ----------
+async function searchSkills(){
+  const q = $('#skillSearch').value.trim();
+  if(!q) return;
+  const src = $('#searchSrc').value;
+  $('#marketList').innerHTML='<div class="empty">搜索中…</div>';
+  const r = src==='sh' ? await api('/api/skills/search-sh?q='+encodeURIComponent(q)) : await api('/api/skills/search?q='+encodeURIComponent(q));
+  if(r.error){ $('#marketList').innerHTML=`<div class="empty">搜索失败: ${esc(r.error)}</div>`; return; }
+  const list = r.results||[];
+  if(!list.length){ $('#marketList').innerHTML='<div class="empty">没有找到相关 skill</div>'; return; }
+  $('#marketList').innerHTML = '<table><tbody><tr><th>名称</th><th>来源</th><th>描述</th><th>状态</th><th>操作</th></tr>' + list.map(s=>`
+    <tr><td><div class="name">${esc(s.name)}</div><div class="muted mono">${s.version?'v'+esc(s.version):''}${s.installs!=null?' · '+Number(s.installs).toLocaleString()+' installs':''}</div></td>
+    <td class="desc mono">${esc(s.repo||'')}</td>
+    <td class="desc">${esc((s.description||'').slice(0,140))}</td>
+    <td>${s.status==='installed'?'<span class="badge on">已安装</span>':'<span class="badge">可安装</span>'}</td>
+    <td><button class="btn install-btn" data-source="${esc(s.installCommand||s.name)}">安装</button></td>
+    </tr>`).join('')+'</tbody></table>';
+}
+
+// ---------- 任务编排 ----------
+let orchTimer = null;
+async function loadOrch(){
+  const [cfgR, taskR] = await Promise.all([api('/api/orchestrator/config'), api('/api/orchestrator/tasks')]);
+  const c = cfgR.config||{}, agents = cfgR.agents||[], tasks = taskR.tasks||[];
+  const sw = (key,label,desc)=>`<div class="orch-switch" style="display:flex;gap:10px;align-items:flex-start"><label class="switch"><input type="checkbox" ${c[key]?'checked':''} onchange="orchSet('${key}',this.checked)"><span class="sl"></span></label><div><b>${label}</b><div class="muted" style="font-size:11px">${desc}</div></div></div>`;
+  $('#orchConfig').innerHTML = `
+    <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(240px,1fr));gap:12px">
+      ${sw('enabled','Loop 编排总开关','开启后任务自动拆解→派发→验收→续步')}
+      ${sw('crossClient','跨 Client 子 Agent','允许派发给 Codex/Devin 等其他 Agent CLI（需各自已登录）')}
+      ${sw('autoContinue','自动续步','任务完成后自动规划下一步优化，持续推进项目')}
+    </div>
+    <div style="display:flex;gap:8px;flex-wrap:wrap;margin-top:12px;align-items:center">
+      <span class="muted">规划模型(固定不切换):</span>
+      <select id="orchModel" style="width:auto">${['auto','simple','coding','complex','expert'].map(m=>`<option ${c.planner?.model===m?'selected':''}>${m}</option>`).join('')}</select>
+      <span class="muted">并发:</span><input id="orchConc" type="number" min="1" max="4" value="${c.maxConcurrent||2}" style="width:60px">
+      <span class="muted">续步上限:</span><input id="orchMaxCont" type="number" min="0" max="20" value="${c.maxContinuations??5}" style="width:60px">
+      <button class="ghost" onclick="orchSaveParams()">保存参数</button>
+      <span class="muted" style="margin-left:auto">子 Agent: ${agents.map(a=>`<span class="badge ${a.available?'':'off'}">${a.label}${a.available?'':'(不可用)'}</span>`).join(' ')}</span>
+    </div>`;
+  $('#orchCount').textContent = `${tasks.length} 个任务`;
+  const stColor = {pending:'#a8a29e',planning:'#a8741a',running:'#2f5f8f',verifying:'#6d4a8f',done:'#3e7c4f',failed:'#a83226',blocked:'#a83226',paused:'#a8a29e'};
+  $('#orchList').innerHTML = tasks.length ? tasks.slice().reverse().map(t=>{
+    const steps = t.plan||[];
+    const stepRows = steps.map(s=>`<tr><td class="mono">${esc(s.id)}</td><td>${esc(s.title)}</td><td><span class="badge">${esc(s.agent)}</span>${s.needsDebate?' <span class="badge">辩论</span>':''}</td><td><span style="color:${stColor[s.status]||'#8b949e'}">${s.status}</span></td><td class="desc">${esc((s.result||'').slice(0,100))}</td></tr>`).join('');
+    const logs = (t.log||[]).slice(-6).map(l=>`<div class="mono" style="font-size:10.5px;color:var(--faint)">[${new Date(l.ts).toLocaleTimeString()}] ${esc(l.msg)}</div>`).join('');
+    return `<div class="card" style="margin-bottom:10px">
+      <div class="toolbar">
+        <b>${esc(t.goal.slice(0,80))}${t.goal.length>80?'…':''}</b>
+        ${t.parentId?'<span class="badge">续步</span>':''}
+        <span style="color:${stColor[t.status]||'#8b949e'};font-weight:600">${t.status}</span>
+        <span class="muted" style="margin-left:auto">${steps.filter(s=>s.status==='done').length}/${steps.length} 步完成</span>
+        <button class="ghost" data-act="orch-pause" data-id="${t.id}" ${t.status==='paused'?'disabled':''}>暂停</button>
+        <button class="ghost" data-act="orch-resume" data-id="${t.id}" ${t.status!=='paused'?'disabled':''}>继续</button>
+        <button class="ghost danger" data-act="orch-stop" data-id="${t.id}">停止</button>
+        <button class="ghost danger" data-act="orch-del" data-id="${t.id}">删除</button>
+      </div>
+      ${t.summary?`<div class="desc" style="margin:6px 0">验收: ${esc(t.summary.slice(0,300))}</div>`:''}
+      ${stepRows?`<table class="mini-table"><tr><th>ID</th><th>步骤</th><th>Agent</th><th>状态</th><th>结果</th></tr>${stepRows}</table>`:''}
+      ${logs?`<div class="fold open"><button class="fold-head" type="button"><span class="chev">▶</span>日志<span class="n">${(t.log||[]).length}</span></button><div class="fold-body"><div class="fold-inner" style="padding:6px 4px">${logs}</div></div></div>`:''}
+    </div>`;
+  }).join('') : '<div class="empty">暂无任务 — 在上方创建一个目标开始</div>';
+  clearTimeout(orchTimer);
+  if($('#tab-orch').style.display!=='none') orchTimer = setTimeout(loadOrch, 8000);
+}
+async function orchSet(k,v){ await api('/api/orchestrator/config',{method:'PUT',body:{[k]:v}}); toast(k+' → '+v); }
+async function orchSaveParams(){
+  await api('/api/orchestrator/config',{method:'PUT',body:{maxConcurrent:+$('#orchConc').value||2,maxContinuations:+$('#orchMaxCont').value??5,planner:{model:$('#orchModel').value}}});
+  toast('参数已保存'); loadOrch();
+}
+async function orchCreate(){
+  const goal=$('#orchGoal').value.trim(); if(!goal){toast('请输入任务目标',true);return;}
+  const r=await api('/api/orchestrator/tasks',{method:'POST',body:{goal,workdir:$('#orchWorkdir').value.trim()||undefined}});
+  if(r.error){toast(r.error,true);return;}
+  $('#orchGoal').value=''; toast('任务已创建: '+r.task.id); loadOrch();
+}
+async function orchAction(id,act){ await api(`/api/orchestrator/tasks/${id}/${act}`,{method:'POST',body:{}}); loadOrch(); }
+async function orchDel(id){ if(!confirm('删除该任务及其记录？'))return; await api(`/api/orchestrator/tasks/${id}`,{method:'DELETE'}); loadOrch(); }
+
+// ---------- 事件委托 ----------
+document.addEventListener('click', e => {
+  const foldEl = e.target.closest('.fold-head');
+  if(foldEl){ foldEl.parentElement.classList.toggle('open'); return; }
+  const el = e.target.closest('[data-act],.install-btn');
+  if(!el) return;
+  const act = el.dataset.act || 'market-install';
+  const d = el.dataset;
+  if(act==='market-install'){ openInstallModal(d.source); return; }
+  if(act==='import-mcp'){ api('/api/agents/import-mcp',{method:'POST',body:{agentId:d.agent,serverName:d.name}}).then(r=>{ toast(r.success===false?'导入失败: '+(r.message||''):'已导入 '+d.name+' → MCPHub', r.success===false); loadServers(); }); return; }
+  if(act==='link-skill'){ agentSkillAction(d.path, d.agent, true); return; }
+  if(act==='copy-skill'){ agentSkillAction(d.path, d.agent, false); return; }
+  if(act==='srv-toggle'){ srvToggle(d.name, d.enabled==='true'); return; }
+  if(act==='srv-reload'){ srvReload(d.name); return; }
+  if(act==='srv-edit'){ srvEdit(d.name); return; }
+  if(act==='srv-del'){ srvDel(d.name); return; }
+  if(act==='skill-inspect'){ skillInspect(d.name); return; }
+  if(act==='skill-toggle'){ skillToggle(d.name, d.disabled==='true'); return; }
+  if(act==='skill-uninstall'){ skillUninstall(d.name); return; }
+  if(act==='orch-pause'){ orchAction(d.id,'pause'); return; }
+  if(act==='orch-resume'){ orchAction(d.id,'resume'); return; }
+  if(act==='orch-stop'){ orchAction(d.id,'stop'); return; }
+  if(act==='orch-del'){ orchDel(d.id); return; }
+});
+
+// ---------- init ----------
+hubHealth(); loadAgents();
+setInterval(hubHealth, 30000);
+</script>
+</body>
+</html>

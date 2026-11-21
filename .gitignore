@@ -1,0 +1,7 @@
+node_modules/
+config.json
+orchestrator.json
+server.log
+gateway-catalog.md
+*.log
+.DS_Store

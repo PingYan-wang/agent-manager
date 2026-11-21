@@ -1,0 +1,8 @@
+{
+  "port": 3100,
+  "hubUrl": "http://localhost:3000",
+  "hubKey": "在此填入 MCPHub API Key（mcphub_ 开头，在 MCPHub Dashboard → Keys 创建）",
+  "hubDataDir": "MCPHub 数据目录，默认 ~/mcphub（mcp_settings.json 所在目录）",
+  "asmBin": "agent-skill-manager (asm) 可执行文件路径，默认 ~/.npm-global/bin/asm",
+  "agentManagerUrl": "可选，默认 http://localhost:<port>"
+}

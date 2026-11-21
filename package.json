@@ -1,0 +1,15 @@
+{
+  "name": "agent-manager",
+  "version": "1.0.0",
+  "description": "本机多 Agent 统一管理：MCP 网关同步、Skill 全 Agent 分发、跨 Agent 会话桥、任务编排器（中文 Web UI）",
+  "type": "module",
+  "private": true,
+  "engines": {
+    "node": ">=18"
+  },
+  "scripts": {
+    "start": "node server.js",
+    "check": "node --check server.js && node --check orchestrator.js && node --check config.js"
+  },
+  "license": "MIT"
+}

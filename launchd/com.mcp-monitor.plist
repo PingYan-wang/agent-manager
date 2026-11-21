@@ -1,0 +1,21 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+	<key>Label</key>
+	<string>com.mcp-monitor</string>
+	<key>ProgramArguments</key>
+	<array>
+		<string>__NODE__</string>
+		<string>__ROOT__/tools/mcp-monitor.js</string>
+	</array>
+	<key>RunAtLoad</key>
+	<true/>
+	<key>StandardErrorPath</key>
+	<string>__HUB_DATA__/mcp-monitor.log</string>
+	<key>StandardOutPath</key>
+	<string>__HUB_DATA__/mcp-monitor.log</string>
+	<key>StartInterval</key>
+	<integer>900</integer>
+</dict>
+</plist>
