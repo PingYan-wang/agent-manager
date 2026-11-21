@@ -183,6 +183,22 @@
   .orch-drawer .od-sub{font-size:11.5px;color:var(--muted);margin-bottom:18px}
   .orch-set-group{margin-bottom:20px}
   .orch-set-group h4{font-size:11px;color:var(--muted);letter-spacing:.08em;margin-bottom:9px;font-weight:600}
+  .orch-tree-view{flex:1;min-height:0;overflow-y:auto;padding:14px 18px;border-top:1px solid var(--line)}
+  .ot-title{font-size:11px;letter-spacing:.08em;margin-bottom:10px}
+  .ot-node{margin-bottom:2px}
+  .ot-row{display:flex;align-items:center;gap:8px;padding:5px 8px;border-radius:var(--r-sm);cursor:pointer;font-size:12.5px;border-left:3px solid transparent}
+  .ot-row:hover{background:var(--surface)}
+  .ot-row .ot-icon{width:16px;text-align:center;flex:none}
+  .ot-row .ot-label{flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+  .ot-row .ot-status{font-size:10.5px;flex:none}
+  .ot-row.st-running{border-left-color:#3b6fd4}.ot-row.st-running .ot-status{color:#3b6fd4}
+  .ot-row.st-retrying{border-left-color:var(--warn)}.ot-row.st-retrying .ot-status{color:var(--warn)}
+  .ot-row.st-done{border-left-color:var(--ok)}.ot-row.st-done .ot-status{color:var(--ok)}
+  .ot-row.st-failed{border-left-color:var(--danger)}.ot-row.st-failed .ot-status{color:var(--danger)}
+  .ot-row.st-awaiting{border-left-color:var(--accent)}.ot-row.st-awaiting .ot-status{color:var(--accent)}
+  .ot-detail{margin:2px 0 6px 26px;padding:8px 10px;background:var(--surface);border:1px solid var(--line);border-radius:var(--r-sm);font-size:11.5px;white-space:pre-wrap;word-break:break-all;line-height:1.5}
+  .orch-pool-row{display:flex;align-items:center;gap:8px;padding:5px 0;border-bottom:1px dashed var(--line);font-size:12px}
+  .orch-pool-row:last-child{border-bottom:none}
   .orch-set-row{display:flex;gap:10px;align-items:flex-start;padding:8px 0;border-bottom:1px dashed var(--line)}
   .orch-set-row:last-child{border-bottom:none}
   .orch-set-row .sr-txt{flex:1;min-width:0}
@@ -395,6 +411,7 @@ Dashboard:  http://localhost:3000  (账号见 MCPHub Dashboard)
         <main class="orch-main">
           <div id="orchTaskBar" class="orch-taskbar"></div>
           <deep-chat id="orchChatEl" class="orch-chat"></deep-chat>
+          <div id="orchTreeView" class="orch-tree-view" style="display:none"></div>
           <div class="orch-composer">
             <div class="orch-composer-row">
               <select id="orchClient" title="单 Client 模式下的执行客户端（跨 Client 开启时由编排器分配）">
@@ -928,15 +945,15 @@ function initOrchChat(){
 }
 
 async function loadOrch(){
-  const [cfgR, taskR] = await Promise.all([api('/api/orchestrator/config'), api('/api/orchestrator/tasks')]);
-  orchCfg = cfgR.config || {}; orchAgents = cfgR.agents || [];
+  const [cfgR, taskR, poolR] = await Promise.all([api('/api/orchestrator/config'), api('/api/orchestrator/tasks'), api('/api/orchestrator/agent-pool').catch(()=>null)]);
+  orchCfg = cfgR.config || {}; orchAgents = cfgR.agents || []; orchPool = poolR?.agents || [];
   if($('#orchDrawer')?.classList.contains('show')) renderOrchConfig();
   const tasks = (taskR.tasks || []).slice().sort((a,b)=>(b.createdAt||0)-(a.createdAt||0));
   renderOrchTop(tasks); renderOrchList(tasks); renderOrchComposer();
   initOrchChat();
   if(orchSelId && tasks.some(t=>t.id===orchSelId)) await renderOrchDetail(orchSelId, false);
   else if(tasks.length){ orchSelId = tasks[0].id; await renderOrchDetail(orchSelId, true); }
-  else { orchSelId = null; orchChatTask = null; const dc=$('#orchChatEl'); if(dc&&orchChatReady){ dc.history=[]; dc.refreshMessages(); } }
+  else { orchSelId = null; orchChatTask = null; const dc=$('#orchChatEl'); if(dc&&orchChatReady){ dc.history=[]; dc.refreshMessages(); } renderOrchTree(null); }
   clearTimeout(orchTimer);
   if($('#tab-orch').style.display!=='none') orchTimer = setTimeout(loadOrch, 8000);
 }
@@ -973,6 +990,45 @@ function renderOrchComposer(){
   sel.value = cur;
 }
 
+let orchView='chat', orchPool=[], orchTreeTask=null; const orchTreeOpen=new Set();
+const ORCH_NODE_ICON={goal:'🎯',plan:'📋',step:'▸',verify:'✔',repair:'🔧',review:'⚖',continue:'↻'};
+const ORCH_NODE_TXT={pending:'等待',running:'执行中',retrying:'重试中',done:'完成',failed:'失败',awaiting:'待裁决',blocked:'阻塞'};
+function renderOrchTree(t){
+  const box=$('#orchTreeView'); if(!box) return;
+  const dc=$('#orchChatEl');
+  if(orchView==='tree'){ box.style.display='block'; if(dc) dc.style.display='none'; } else { box.style.display='none'; if(dc) dc.style.display=''; }
+  if(orchView!=='tree') return;
+  orchTreeTask=t;
+  const nodes=(t&&Array.isArray(t.tree))?t.tree:[];
+  if(!nodes.length){ box.innerHTML='<div class="empty">暂无执行树（任务创建后自动生成）</div>'; return; }
+  const byId={}; nodes.forEach(n=>byId[n.id]=n);
+  const kids={}; nodes.forEach(n=>{ const p=n.parentId&&byId[n.parentId]?n.parentId:null; (kids[p]=kids[p]||[]).push(n); });
+  const roots=(kids[null]||[]).slice().sort((a,b)=>(a.ts||0)-(b.ts||0));
+  const row=(n,depth)=>{
+    const st=n.status||'pending';
+    const open=orchTreeOpen.has(n.id);
+    const meta=[n.attempt>1?'尝试'+n.attempt:'', n.ts?orchTime(n.ts):''].filter(Boolean).join(' · ');
+    return `<div class="ot-node" style="margin-left:${depth*18}px">
+      <div class="ot-row st-${st} ${open?'open':''}" data-act="orch-tree-node" data-id="${esc(n.id)}">
+        <span class="ot-icon">${ORCH_NODE_ICON[n.kind]||'·'}</span>
+        <span class="ot-label">${esc(n.label||n.id)}</span>
+        ${meta?`<span class="ot-meta muted" style="font-size:10.5px;flex:none">${esc(meta)}</span>`:''}
+        <span class="ot-status">${ORCH_NODE_TXT[st]||st}</span>
+      </div>
+      ${open?`<div class="ot-detail">${esc([n.detail||'', n.agent?('agent: '+n.agent+(n.agentId?' · '+n.agentId:'')):''].filter(Boolean).join('\n')||'（无详情）')}</div>`:''}
+      ${(kids[n.id]||[]).map(c=>row(c,depth+1)).join('')}
+    </div>`;
+  };
+  box.innerHTML='<div class="ot-title muted">执行树 · 树干=编排循环（目标/计划/验收/返工/裁决/续步），分叉=子 Agent 执行 · 点击节点看详情</div>'+roots.map(n=>row(n,0)).join('');
+}
+async function orchPoolAdd(){
+  const client=$('#orchPoolClient')?.value||'hermes';
+  const label=$('#orchPoolLabel')?.value.trim();
+  const r=await api('/api/orchestrator/agent-pool',{method:'POST',body:{client,label:label||undefined}});
+  if(r.error){toast(r.error,true);return;}
+  toast('已添加子 Agent: '+(r.agent?.label||'')); loadOrch();
+}
+async function orchPoolDel(id){ if(!confirm('删除该子 Agent 实例？'))return; await api('/api/orchestrator/agent-pool/'+id,{method:'DELETE'}); toast('已删除'); loadOrch(); }
 function renderOrchTaskBar(t){
   const steps = t.plan||[];
   const done = steps.filter(s=>s.status==='done').length;
@@ -982,6 +1038,8 @@ function renderOrchTaskBar(t){
     <div class="tb-ctrl">
       <span class="badge" style="color:${orchStColor(t.status)};border-color:${orchStColor(t.status)}">${ORCH_ST_TXT[t.status]||t.status}</span>
       ${t.summary?`<span class="muted" style="font-size:11px;max-width:40%;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${esc(t.summary.slice(0,80))}</span>`:''}
+      <button class="ghost ${orchView==='tree'?'on':''}" data-act="orch-view" data-view="tree">树</button>
+      <button class="ghost ${orchView==='chat'?'on':''}" data-act="orch-view" data-view="chat">对话</button>
       <span class="sp"></span>
       <button class="ghost" data-act="orch-pause" data-id="${t.id}" ${t.status==='paused'||!active?'disabled':''}>暂停</button>
       <button class="ghost" data-act="orch-resume" data-id="${t.id}" ${['paused','blocked','failed'].includes(t.status)?'':'disabled'}>继续</button>
@@ -1057,6 +1115,7 @@ async function renderOrchDetail(id, forceScroll){
   try { const r = await api(`/api/orchestrator/tasks/${id}`); t = r.task; } catch { return; }
   if(!t) return;
   renderOrchTaskBar(t);
+  renderOrchTree(t);
   const dc = document.getElementById('orchChatEl');
   if(!dc || !orchChatReady) return;
   const msgs = orchBuildMessages(t);
@@ -1111,6 +1170,15 @@ function renderOrchConfig(){
       ${num('maxRepairs','返工上限','验收失败后自动返工轮数','轮',0,10)}
       <div class="orch-set-row"><div class="sr-txt"><b>单步超时</b><span class="muted">子 Agent 单步最长运行时间</span></div><span class="orch-num">分钟 <input type="number" min="1" max="60" value="${Math.round((c.dispatchTimeoutMs||0)/60000)}" onchange="orchSetNum('dispatchTimeoutMs',this.value*60000)"></span></div>
     </div>
+    <div class="orch-set-group"><h4>子 Agent 池</h4>
+      <div class="muted" style="font-size:11px;margin-bottom:8px">一个 Client 可建多个实例；编排器自动选空闲实例并行执行，失败自动重试 → 冷却 → 切换 Client</div>
+      <div id="orchPoolList">${(orchPool||[]).map(a=>`<div class="orch-pool-row"><span class="badge ${a.status==='busy'?'warn':a.status==='idle'?'on':''}">${esc(a.label||a.id)}</span><span class="muted" style="font-size:11px">${esc(a.client)} · ${a.status==='busy'?'执行中':a.status==='cooldown'?'冷却中':'空闲'}</span><button class="ghost danger" style="margin-left:auto" data-act="orch-pool-del" data-id="${esc(a.id)}">删除</button></div>`).join('')||'<div class="muted" style="font-size:11px">暂无实例，派发时自动创建</div>'}</div>
+      <div style="display:flex;gap:6px;margin-top:8px">
+        <select id="orchPoolClient">${['hermes','codex','devin'].map(w=>`<option value="${w}">${w}</option>`).join('')}</select>
+        <input id="orchPoolLabel" placeholder="实例名(可选)" style="flex:1">
+        <button class="ghost" data-act="orch-pool-add">添加</button>
+      </div>
+    </div>
     <div class="orch-set-group"><h4>子 Agent 可用性</h4>
       <div class="orch-agents">${(orchAgents||[]).map(a=>`<span class="badge ${a.available?'on':''}" title="${esc(a.note||'')}">${esc(a.label||a.id)}${a.available?'':' · 不可用'}</span>`).join(' ')||'<span class="muted">加载中…</span>'}</div>
     </div>
@@ -1139,6 +1207,10 @@ document.addEventListener('click', e => {
   if(act==='skill-toggle'){ skillToggle(d.name, d.disabled==='true'); return; }
   if(act==='skill-uninstall'){ skillUninstall(d.name); return; }
   if(act==='orch-sel'){ orchSelId = d.id; orchChatTask=null; loadOrch(); return; }
+  if(act==='orch-view'){ orchView=d.view||'chat'; const id=orchChatTask||orchSelId; if(id) renderOrchDetail(id,false); else renderOrchTree(null); return; }
+  if(act==='orch-tree-node'){ if(orchTreeOpen.has(d.id)) orchTreeOpen.delete(d.id); else orchTreeOpen.add(d.id); if(orchTreeTask) renderOrchTree(orchTreeTask); return; }
+  if(act==='orch-pool-add'){ orchPoolAdd(); return; }
+  if(act==='orch-pool-del'){ orchPoolDel(d.id); return; }
   if(act==='orch-pause'){ orchAction(d.id,'pause'); return; }
   if(act==='orch-resume'){ orchAction(d.id,'resume'); return; }
   if(act==='orch-stop'){ orchAction(d.id,'stop'); return; }
