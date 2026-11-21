@@ -3,7 +3,7 @@
 // 依赖: Node >= 18, 全局安装的 @samanhappy/mcphub 与 agent-skill-manager
 import http from 'node:http';
 import https from 'node:https';
-import { execFile } from 'node:child_process';
+import { execFile, spawn } from 'node:child_process';
 import { readFile, readdir, stat, mkdir, symlink, realpath, lstat, writeFile } from 'node:fs/promises';
 import { watch } from 'node:fs';
 import { initOrchestrator, handleOrchestratorApi } from './orchestrator.js';
@@ -663,7 +663,175 @@ function proxyHttp(req, res, entry) {
   req.pipe(pr);
 }
 
-const routes = [
+
+// ===== 自动路由：配置管理 / 分类器 / 本地模型 / Agent 接入 =====
+const ROUTER_DIR = path.join(HOME, '.hermes', 'router');
+const ROUTER_CFG = path.join(ROUTER_DIR, 'config.json');
+const APPLY_FILE = path.join(DATA_DIR, 'router-agent-apply.json');
+const OLLAMA_BIN = '/opt/homebrew/bin/ollama';
+const LOCAL_PULLS = new Map(); // model -> {status, log}
+
+const readRouterConfig = async () => { try { return JSON.parse(await readFile(ROUTER_CFG, 'utf8')); } catch { return null; } };
+
+function maskConfig(cfg) {
+  const out = JSON.parse(JSON.stringify(cfg));
+  for (const r of Object.values(out.routes || {})) {
+    r.apiKey = '***';
+    for (const f of r.fallbacks || []) f.apiKey = '***';
+  }
+  if (out.classifier && out.classifier.apiKey) out.classifier.apiKey = '***';
+  for (const p of Object.values(out.providers || {})) if (p.apiKey) p.apiKey = '***';
+  return out;
+}
+
+function mergeConfigKeys(incoming, old) {
+  for (const [name, r] of Object.entries(incoming.routes || {})) {
+    const o = (old.routes || {})[name] || {};
+    r.apiKey = (!r.apiKey || r.apiKey === '***') ? o.apiKey : r.apiKey;
+    (r.fallbacks || []).forEach((f, i) => { f.apiKey = (!f.apiKey || f.apiKey === '***') ? ((o.fallbacks || [])[i] || {}).apiKey : f.apiKey; });
+  }
+  if (incoming.classifier && old.classifier) incoming.classifier.apiKey = (!incoming.classifier.apiKey || incoming.classifier.apiKey === '***') ? old.classifier.apiKey : incoming.classifier.apiKey;
+  for (const [n, p] of Object.entries(incoming.providers || {})) {
+    const o = (old.providers || {})[n];
+    if (o) p.apiKey = (!p.apiKey || p.apiKey === '***') ? o.apiKey : p.apiKey;
+  }
+  return incoming;
+}
+
+async function reloadRouter() {
+  try {
+    const r = await fetch('http://127.0.0.1:8788/admin/reload', { method: 'POST', signal: AbortSignal.timeout(5000) });
+    return r.ok;
+  } catch { return false; }
+}
+
+async function probeModels(baseUrl, apiKey) {
+  try {
+    const r = await fetch(`${String(baseUrl).replace(/\/+$/, '')}/models`, { headers: { authorization: `Bearer ${apiKey || ''}` }, signal: AbortSignal.timeout(5000) });
+    if (!r.ok) return { baseUrl, models: [], error: `HTTP ${r.status}` };
+    const j = await r.json();
+    return { baseUrl, models: (j.data || []).map(m => m.id).slice(0, 80) };
+  } catch (e) { return { baseUrl, models: [], error: String((e && e.message) || e).slice(0, 80) }; }
+}
+
+async function pullTail(model) {
+  const s = LOCAL_PULLS.get(model);
+  if (!s || !s.log) return '';
+  try { const t = await readFile(s.log, 'utf8'); return t.slice(-300); } catch { return ''; }
+}
+
+const routerMgmtRoutes = [
+  ['GET', /^\/api\/router\/config$/, async () => {
+    const c = await readRouterConfig();
+    if (!c) return json({ error: 'router config not found' }, 500);
+    return json({ config: maskConfig(c) });
+  }],
+  ['PUT', /^\/api\/router\/config$/, async (req, res) => {
+    let incoming;
+    try { incoming = JSON.parse(await readBody(req)); } catch { return json({ error: 'invalid json' }, 400); }
+    if (!incoming || typeof incoming.routes !== 'object' || !Object.keys(incoming.routes).length) return json({ error: 'routes 不能为空' }, 400);
+    for (const [n, r] of Object.entries(incoming.routes)) {
+      if (!r || typeof r.model !== 'string' || !r.model.trim()) return json({ error: `路由 ${n} 缺少 model` }, 400);
+      r.fallbacks = Array.isArray(r.fallbacks) ? r.fallbacks.filter(f => f && f.model) : [];
+    }
+    const old = (await readRouterConfig()) || {};
+    incoming = mergeConfigKeys(incoming, old);
+    await mkdir(ROUTER_DIR, { recursive: true });
+    await writeFile(ROUTER_CFG + '.bak-' + Date.now(), JSON.stringify(old, null, 2));
+    await writeFile(ROUTER_CFG, JSON.stringify(incoming, null, 2));
+    let reloaded = await reloadRouter();
+    if (!reloaded) { try { execFile('/bin/launchctl', ['kickstart', '-k', 'gui/501/ai.hermes.router']); } catch {} }
+    return json({ ok: true, reloaded });
+  }],
+  ['GET', /^\/api\/router\/classifier\/models$/, async () => {
+    const c = await readRouterConfig();
+    if (!c) return json({ providers: [] });
+    const seen = new Map();
+    const add = (u, k) => { if (u && !seen.has(u)) seen.set(u, k || ''); };
+    for (const r of Object.values(c.routes || {})) { add(r.baseUrl, r.apiKey); for (const f of r.fallbacks || []) add(f.baseUrl, f.apiKey); }
+    const cc = c.classifier || {}; add(cc.baseUrl, cc.apiKey);
+    const providers = await Promise.all([...seen.entries()].slice(0, 8).map(([u, k]) => probeModels(u, k)));
+    return json({ providers });
+  }],
+  ['GET', /^\/api\/router\/local-models$/, async () => {
+    const pulls = {};
+    for (const [m] of LOCAL_PULLS) pulls[m] = { status: LOCAL_PULLS.get(m).status, tail: await pullTail(m) };
+    try {
+      const r = await fetch('http://127.0.0.1:11434/api/tags', { signal: AbortSignal.timeout(4000) });
+      const j = await r.json();
+      return json({ models: (j.models || []).map(m => m.name), pulls });
+    } catch { return json({ models: [], pulls, error: 'ollama offline' }); }
+  }],
+  ['POST', /^\/api\/router\/local-models\/pull$/, async (req, res) => {
+    let body = {};
+    try { body = JSON.parse(await readBody(req) || '{}'); } catch {}
+    const model = String(body.model || '').trim();
+    if (!/^[a-zA-Z0-9._:-]{2,80}$/.test(model)) return json({ error: 'invalid model name' }, 400);
+    if (LOCAL_PULLS.has(model)) return json({ ok: true, status: LOCAL_PULLS.get(model).status });
+    const safe = model.replace(/[^a-zA-Z0-9._-]/g, '_');
+    const log = path.join(DATA_DIR, `ollama-pull-${safe}.log`);
+    LOCAL_PULLS.set(model, { status: 'pulling', log });
+    const { createWriteStream } = await import('node:fs');
+    const out = createWriteStream(log, { flags: 'a' });
+    out.write(`\n=== pull ${model} @ ${new Date().toISOString()} ===\n`);
+    const child = spawn(OLLAMA_BIN, ['pull', model], { stdio: ['ignore', out, out] });
+    child.on('close', (code) => { const s = LOCAL_PULLS.get(model); if (s) { s.status = code === 0 ? 'done' : 'error'; s.code = code; } out.end(); });
+    child.on('error', (e) => { const s = LOCAL_PULLS.get(model); if (s) { s.status = 'error'; s.error = String(e.message); } out.end(); });
+    return json({ ok: true, status: 'pulling' });
+  }],
+  ['GET', /^\/api\/router\/agent-apply$/, async () => {
+    const f = (await readJson(APPLY_FILE)) || { enabled: true };
+    return json({ enabled: !!f.enabled });
+  }],
+  ['PUT', /^\/api\/router\/agent-apply$/, async (req, res) => {
+    let body = {};
+    try { body = JSON.parse(await readBody(req) || '{}'); } catch {}
+    const enabled = !!body.enabled;
+    await mkdir(DATA_DIR, { recursive: true });
+    await writeFile(APPLY_FILE, JSON.stringify({ enabled }));
+    return json({ ok: true, enabled });
+  }],
+  ['GET', /^\/api\/router\/agents$/, async () => {
+    const agents = [];
+    try {
+      const y = await readFile(path.join(HOME, '.hermes', 'config.yaml'), 'utf8');
+      const def = (y.match(/^\s*default:\s*(\S+)/m) || [])[1] || '';
+      const prov = (y.match(/^\s*provider:\s*(\S+)/m) || [])[1] || '';
+      const base = (y.match(/base_url:\s*(\S+)/) || [])[1] || '';
+      agents.push({ id: 'hermes', name: 'Hermes 桌面端', applied: def === 'auto' && base.includes(':8788'), detail: `model=${def} provider=${prov} → ${base}` });
+    } catch { agents.push({ id: 'hermes', name: 'Hermes 桌面端', applied: false, error: 'config.yaml 未找到' }); }
+    for (const [id, name] of [['workbuddy', 'WorkBuddy'], ['devin', 'Devin CLI'], ['codex', 'Codex CLI']]) agents.push({ id, name, applied: false, manual: true, hint: '手动将其 LLM Base URL 指向自动路由入口' });
+    return json({ agents, proxyUrl: 'http://127.0.0.1:3100/px/router/v1', directUrl: 'http://127.0.0.1:8788/v1' });
+  }],
+  ['POST', /^\/api\/router\/agents\/apply$/, async (req, res) => {
+    let body = {};
+    try { body = JSON.parse(await readBody(req) || '{}'); } catch {}
+    if (body.agent !== 'hermes') return json({ error: '该 Agent 需手动接入' }, 400);
+    const f = (await readJson(APPLY_FILE)) || { enabled: true };
+    if (!f.enabled) return json({ error: '一键接入开关已关闭' }, 403);
+    const cfgPath = path.join(HOME, '.hermes', 'config.yaml');
+    let y = '';
+    try { y = await readFile(cfgPath, 'utf8'); } catch { return json({ error: 'config.yaml 未找到' }, 500); }
+    const applied = /base_url:\s*http:\/\/127\.0\.0\.1:8788\/v1/.test(y) && /^\s*default:\s*auto$/m.test(y);
+    if (applied) return json({ ok: true, already: true });
+    const PROVIDER_BLOCK = 'custom_providers:\n  - name: hermes-auto\n    base_url: http://127.0.0.1:8788/v1\n    api_key: hermes-local-router\n    model: auto\n    context_length: 131072\n    models:\n      auto: {}\n      simple: {}\n      coding: {}\n      complex: {}\n      expert: {}\n    models_discovered: true\n';
+    const ENTRY = '  - name: hermes-auto\n    base_url: http://127.0.0.1:8788/v1\n    api_key: hermes-local-router\n    model: auto\n    context_length: 131072\n    models:\n      auto: {}\n      simple: {}\n      coding: {}\n      complex: {}\n      expert: {}\n    models_discovered: true\n';
+    let next = y;
+    if (/custom_providers:/.test(next)) {
+      if (!/hermes-auto/.test(next)) next = next.replace(/(custom_providers:\s*\n)/, '$1' + ENTRY);
+    } else {
+      next += '\n' + PROVIDER_BLOCK;
+    }
+    if (/^model:\n  default: \S+\n  provider: \S+/m.test(next)) next = next.replace(/^model:\n  default: \S+\n  provider: \S+/m, 'model:\n  default: auto\n  provider: hermes-auto');
+    else if (/^model:\n  default: \S+/m.test(next)) next = next.replace(/^model:\n  default: \S+/m, 'model:\n  default: auto\n  provider: hermes-auto');
+    else next = 'model:\n  default: auto\n  provider: hermes-auto\n' + next;
+    await writeFile(cfgPath + '.bak-apply-' + Date.now(), y);
+    await writeFile(cfgPath, next);
+    return json({ ok: true, note: '已写入 Hermes 配置，重启 Hermes 桌面端后生效' });
+  }],
+];
+
+const routes = [...routerMgmtRoutes,
   // ---- 本地服务代理（/px/<id>/ → target） ----
   ['GET', /^\/api\/proxy\/list$/, async (req, res) => {
     const base = `http://localhost:${PORT}`;

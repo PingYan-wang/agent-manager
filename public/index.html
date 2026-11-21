@@ -222,10 +222,8 @@
     <div class="card">
       <div class="toolbar">
         <h3>已检测到的 Agent · MCP / Skill 清单</h3>
-        <span class="muted" id="agentGw" style="margin-left:12px"></span>
         <button class="ghost" style="margin-left:auto" onclick="loadAgents()">↻ 重新扫描</button>
       </div>
-      <div id="agentGwServers" style="display:flex;gap:6px;flex-wrap:wrap;margin-bottom:12px"></div>
       <div id="agentList"><div class="empty">扫描中…</div></div>
     </div>
   </section>
@@ -428,20 +426,36 @@ async function loadAgents(){
   const r = await api('/api/agents');
   const list = r.agents||[];
   const gw = r.gateway || {};
-  $('#agentGw').textContent = gw.ok ? `网关 ${gw.connected}/${gw.total} 服务在线` : 'MCPHub 离线';
-  $('#agentGwServers').innerHTML = (gw.servers||[]).map(s=>
-    `<span class="badge ${/connect|ready/i.test(s.status)?'on':(s.status==='disabled'?'':'warn')}">${esc(s.name)} · ${esc(s.status)}</span>`).join('');
+  const gwMap = {};
+  (gw.servers||[]).forEach(s => { gwMap[s.name] = s.status; });
+  const gwOk = s => /connect|ready/i.test(s||'');
+  // 每个 MCP 条目的连接状态：网关条目看网关健康；其余按 网关命名规则 <agent>-<name> 匹配网关状态
+  const mcpStatus = (a, s) => {
+    if (s.disabled) return { cls:'', txt:'禁用' };
+    const isHub = /mcphub/i.test(s.name||'') || (s.url||'').includes(gw.endpoint||'\0');
+    if (isHub) return gw.ok ? { cls:'on', txt:'在线' } : { cls:'', txt:'离线' };
+    const cand = `${a.id}-${s.name}`.replace(/[^\w.-]/g,'_');
+    const key = gwMap[cand] !== undefined ? cand
+      : Object.keys(gwMap).find(k => k === s.name || k.endsWith(`-${String(s.name).replace(/[^\w.-]/g,'_')}`));
+    const st = key !== undefined ? gwMap[key] : undefined;
+    if (st) return gwOk(st) ? { cls:'on', txt:'在线' } : { cls:'', txt:'离线' };
+    return { cls:'', txt:'—' };
+  };
   $('#agentList').innerHTML = '<div class="agent-grid">' + list.map(a=>{
     const connInner = `<table class="mini-table"><tr><th>项目</th><th>状态</th><th>详情</th></tr>
       <tr><td>应用</td><td>${a.appExists?'<span class="badge on">已安装</span>':'<span class="badge off">未安装</span>'}</td><td class="path">${esc(a.app||'—')}</td></tr>
       ${a.cli?`<tr><td>CLI</td><td>${a.cliPath?'<span class="badge on">可用</span>':'<span class="badge off">未找到</span>'}</td><td class="path">${esc(a.cliPath||a.cli)}</td></tr>`:''}
       <tr><td>进程</td><td>${a.running?'<span class="badge on">运行中</span>':'<span class="badge">未运行</span>'}</td><td class="muted">—</td></tr>
       <tr><td>MCPHub</td><td>${a.mcphub?'<span class="badge on">已接入</span>':'<span class="badge warn">未接入</span>'}</td><td class="path">${esc(gw.endpoint||'')}</td></tr></table>`;
-    const mcpInner = a.mcpServers.length ? `<table class="mini-table"><tr><th>名称</th><th>类型</th><th>地址/命令</th><th></th></tr>` + a.mcpServers.map(s=>`
-      <tr><td class="mono">${esc(s.name)}${s.disabled?' <span class="badge off">禁用</span>':''}</td>
+    const mcpInner = a.mcpServers.length ? `<table class="mini-table"><tr><th>名称</th><th>类型</th><th>状态</th><th>地址/命令</th><th></th></tr>` + a.mcpServers.map(s=>{
+      const st = mcpStatus(a, s);
+      return `
+      <tr><td class="mono">${esc(s.name)}</td>
       <td><span class="badge">${esc(s.transport||s.kind)}</span></td>
+      <td><span class="badge ${st.cls}">${st.txt}</span></td>
       <td class="path">${esc(s.url||[s.command,(s.args||[]).join(' ')].filter(Boolean).join(' '))}</td>
-      <td>${s.kind==='http'&&!s.disabled?`<button class="ghost" data-act="import-mcp" data-agent="${a.id}" data-name="${esc(s.name)}">导入</button>`:''}</td></tr>`).join('') + '</table>'
+      <td>${s.kind==='http'&&!s.disabled?`<button class="ghost" data-act="import-mcp" data-agent="${a.id}" data-name="${esc(s.name)}">导入</button>`:''}</td></tr>`;
+    }).join('') + '</table>'
       : '<div class="muted" style="padding:6px 2px">未检测到 MCP 配置</div>';
     const skillInner = a.skills.length ? `<table class="mini-table"><tr><th>名称</th><th>路径</th><th></th></tr>` + a.skills.map(s=>`
       <tr><td class="mono">${esc(s.name)}${s.via==='import'?' <span class="badge">导入</span>':''}</td>
