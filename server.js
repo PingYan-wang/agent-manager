@@ -1855,7 +1855,7 @@ const server = http.createServer(async (req, res) => {
     // /px/<id>/ 本地服务代理（SSE/流式透传）
     const px = matchProxy(url.pathname);
     if (px) return proxyHttp(req, res, px);
-    let fp = path.join(__dirname, 'public', url.pathname === '/' ? 'index.html' : decodeURIComponent(url.pathname));
+    let fp = path.join(__dirname, 'public', url.pathname === '/' ? 'index.html' : url.pathname === '/favicon.ico' ? '/icons/logo.png' : decodeURIComponent(url.pathname));
     if (!fp.startsWith(path.join(__dirname, 'public'))) return json(res, 403, { error: 'Forbidden' });
     try {
       const data = await readFile(fp);

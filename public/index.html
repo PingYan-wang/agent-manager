@@ -4,6 +4,7 @@
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>Agent Manager — MCP & Skills 统一管理</title>
+<link rel="icon" type="image/png" href="/icons/logo.png">
 <style>
   :root{
     --bg:#f6f3ec; --surface:#fdfcf8; --surface2:#f3efe6;
@@ -573,6 +574,11 @@ Dashboard:  http://localhost:3000  (账号见 MCPHub Dashboard)
   <div class="cmdk-list" id="cmdkList"></div>
 </div>
 
+<div class="cmdk-mask" id="cmdkMask" onclick="cmdkClose()"></div>
+<div class="cmdk" id="cmdk">
+  <div class="cmdk-input"><span>⌘K</span><input id="cmdkInput" placeholder="搜索命令、页面、任务操作…" autocomplete="off"></div>
+  <div class="cmdk-list" id="cmdkList"></div>
+</div>
 <script>
 const $ = s => document.querySelector(s);
 const api = async (path, opt={}) => {
