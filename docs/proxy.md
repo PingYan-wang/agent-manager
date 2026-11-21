@@ -1,3 +1,5 @@
+[English](proxy.en.md) · [中文](proxy.md)
+
 # 反向代理 / 统一入口
 
 [← 返回 README](../README.md)

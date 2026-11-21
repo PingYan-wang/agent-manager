@@ -1,3 +1,5 @@
+[English](skills.en.md) · [中文](skills.md)
+
 # Skill 统一同步
 
 [← 返回 README](../README.md)

@@ -3,6 +3,8 @@ name: agent-ecosystem
 description: 本机 Agent 生态系统的统一能力入口。当用户提到其他 Agent 的对话/历史、MCP 服务、skill 管理、任务编排/子 Agent/长程任务自动拆分时使用。提供跨系统与同系统会话读取、MCP 网关、skill 同步、任务编排器的使用方式。
 ---
 
+[English](SKILL.en.md) · [中文](SKILL.md)
+
 # Agent 生态系统能力
 
 本机运行着一套本地 Agent 管理层（Agent Manager, http://localhost:3100），把多个 AI Agent 的能力打通共享。**不要假设你只能看到当前对话**——以下能力默认可用。
