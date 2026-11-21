@@ -1806,12 +1806,38 @@ const routes = [...routerMgmtRoutes,
 
 const MIME = { '.html': 'text/html; charset=utf-8', '.js': 'text/javascript', '.css': 'text/css', '.svg': 'image/svg+xml', '.png': 'image/png', '.json': 'application/json' };
 
+// ===== GET 响应短缓存 =====
+// 读多写少的接口缓存 30s：启动预热 + 页内轮询/切 tab 不再重复跑 ps/lsof/Hub 请求；
+// 任何 POST/PUT/DELETE 经本服务时整体失效，保证写后读一致。
+const GET_CACHE = new Map(); // url -> { at, data }
+const GET_CACHE_TTL = 30 * 1000;
+const CACHEABLE_GET = /^\/api\/(overview|agents|mcp\/(servers|health|keys|settings)|skills|skills\/local|router\/(status|stats|trend|balance|config|classifier\/models|local-models|model-usage|agent-apply|agents|digests)|proxy\/list|ecosystem\/bootstrap)/;
+
 const server = http.createServer(async (req, res) => {
   const url = new URL(req.url, `http://localhost:${PORT}`);
   try {
+    if (req.method !== 'GET' && req.method !== 'HEAD') GET_CACHE.clear();
     if (url.pathname.startsWith('/api/')) {
       let body;
       if (req.method !== 'GET' && req.method !== 'HEAD') body = await readBody(req);
+      if (req.method === 'GET' && CACHEABLE_GET.test(url.pathname)) {
+        const ck = url.pathname + url.search;
+        const hit = GET_CACHE.get(ck);
+        if (hit && Date.now() - hit.at < GET_CACHE_TTL) return json(res, 200, hit.data);
+        const origWrite = res.write.bind(res);
+        const origEnd = res.end.bind(res);
+        const chunks = [];
+        res.write = (c, ...a) => { chunks.push(Buffer.isBuffer(c) ? c : Buffer.from(c)); return origWrite(c, ...a); };
+        res.end = (c, ...a) => {
+          if (c) chunks.push(Buffer.isBuffer(c) ? c : Buffer.from(c));
+          try {
+            const text = Buffer.concat(chunks.filter((b) => typeof b === 'object')).toString();
+            const data = JSON.parse(text);
+            if (data && typeof data === 'object' && !data.error) GET_CACHE.set(ck, { at: Date.now(), data });
+          } catch { /* 非 JSON 响应不缓存 */ }
+          return origEnd(c, ...a);
+        };
+      }
       if (url.pathname.startsWith('/api/orchestrator/')) {
         const r = await handleOrchestratorApi(url, req.method, body);
         if (r === null) return json(res, 404, { error: 'Not found' });
@@ -1833,7 +1859,9 @@ const server = http.createServer(async (req, res) => {
     if (!fp.startsWith(path.join(__dirname, 'public'))) return json(res, 403, { error: 'Forbidden' });
     try {
       const data = await readFile(fp);
-      res.writeHead(200, { 'Content-Type': MIME[path.extname(fp)] || 'application/octet-stream' });
+      const headers = { 'Content-Type': MIME[path.extname(fp)] || 'application/octet-stream' };
+      if (path.extname(fp) === '.html') headers['Cache-Control'] = 'no-store'; // 面板单页应用，避免浏览器缓存旧 UI
+      res.writeHead(200, headers);
       res.end(data);
     } catch {
       json(res, 404, { error: 'Not found' });
@@ -1940,6 +1968,18 @@ server.listen(PORT, '127.0.0.1', () => {
     mcpMarketFetch('', 50).then((d) => MCP_MKT_CACHE.set('|50', { at: Date.now(), data: d })).catch(() => {});
     skillMarketCached().catch(() => {});
   }, 3000);
+  // 全接口预热：异步打自己的 GET 接口，填充 30s 响应缓存，首屏/切 tab 秒开
+  setTimeout(() => {
+    const base = `http://127.0.0.1:${PORT}`;
+    const warm = [
+      '/api/overview', '/api/agents', '/api/mcp/servers', '/api/mcp/health',
+      '/api/skills', '/api/skills/local', '/api/proxy/list',
+      '/api/router/status', '/api/router/stats', '/api/router/balance',
+      '/api/ecosystem/bootstrap', '/api/orchestrator/tasks', '/api/orchestrator/config',
+    ];
+    // 错峰 300ms 一个，避免启动期并发打满 Hub/asm/ps
+    warm.forEach((p, i) => setTimeout(() => fetch(base + p).catch(() => {}), i * 300));
+  }, 3500);
 });
 
 // ===== 事件驱动自动同步 =====
