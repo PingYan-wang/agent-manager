@@ -818,69 +818,207 @@ async function searchSkills(){
     </tr>`).join('')+'</tbody></table>';
 }
 
-// ---------- 任务编排 ----------
-let orchTimer = null;
+// ---------- 任务编排（deep-chat 会话式界面） ----------
+let orchTimer = null, orchSelId = null, orchCfg = null, orchAgents = [];
+let orchChatTask = null, orchChatCount = 0, orchChatReady = false;
+const ORCH_ST = {pending:'#8d8375',planning:'#8a5f0d',running:'#2f5f8f',verifying:'#6d4a8f',done:'#2f6b3f',failed:'#9c2f21',blocked:'#9c2f21',paused:'#8d8375',awaiting_review:'#8a5f0d'};
+const ORCH_ST_TXT = {pending:'排队',planning:'规划中',running:'执行中',verifying:'验收中',done:'已完成',failed:'失败',blocked:'已阻塞',paused:'已暂停',awaiting_review:'待裁决'};
+const orchStColor = s => ORCH_ST[s] || '#8d8375';
+const orchTime = ts => ts ? new Date(ts).toLocaleString('zh-CN',{month:'numeric',day:'numeric',hour:'2-digit',minute:'2-digit'}) : '';
+const ORCH_AGENT_ROLE = {hermes:'hermes',codex:'codex',devin:'devin'};
+
+function initOrchChat(){
+  const dc = document.getElementById('orchChatEl');
+  if(!dc || orchChatReady) return;
+  if(!customElements.get('deep-chat')) return; // CDN 未加载完成时下次轮询再试
+  orchChatReady = true;
+  // 主题对齐「宣纸+朱砂」
+  dc.chatStyle = {backgroundColor:'transparent'};
+  dc.introMessage = {text:'← 在下方输入目标创建任务，或从左侧选择查看'};
+  dc.names = {
+    default:{text:''},
+    user:{text:'你'},
+    ai:{text:'Agent'},
+    planner:{text:'编排器 · auto'},
+    system:{text:'系统'},
+    review:{text:'验收'},
+    hermes:{text:'Hermes'}, codex:{text:'Codex'}, devin:{text:'Devin'},
+  };
+  dc.messageStyles = {
+    default:{
+      shared:{innerContainer:{fontSize:'13px', lineHeight:'1.65'}},
+      user:{bubble:{backgroundColor:'#211d19', color:'#fdfcf8', borderRadius:'12px'}},
+      ai:{bubble:{backgroundColor:'#f3efe6', color:'#211d19', border:'1px solid #ddd3bf', borderRadius:'12px'}},
+      planner:{bubble:{backgroundColor:'#fdfcf8', color:'#211d19', border:'1px solid #c4b8a2', borderLeft:'3px solid #a93a1c', borderRadius:'4px 12px 12px 4px'}},
+      system:{bubble:{backgroundColor:'transparent', color:'#665c4e', border:'none', fontFamily:'ui-monospace,Menlo,monospace', fontSize:'11px'}},
+      review:{bubble:{backgroundColor:'#f3efe6', color:'#8a5f0d', border:'1px solid rgba(138,95,13,.4)', borderRadius:'12px'}},
+    },
+  };
+  // 隐藏组件自带输入区——任务通过下方编排输入框创建
+  dc.inputAreaStyle = {display:'none'};
+  dc.remarkable = {breaks:true, linkTarget:'_blank'};
+  dc.requestBodyLimits = {maxMessages: 0};
+}
+
 async function loadOrch(){
   const [cfgR, taskR] = await Promise.all([api('/api/orchestrator/config'), api('/api/orchestrator/tasks')]);
-  const c = cfgR.config||{}, agents = cfgR.agents||[], tasks = taskR.tasks||[];
-  const sw = (key,label,desc)=>`<div class="orch-switch" style="display:flex;gap:10px;align-items:flex-start"><label class="switch"><input type="checkbox" ${c[key]?'checked':''} onchange="orchSet('${key}',this.checked)"><span class="sl"></span></label><div><b>${label}</b><div class="muted" style="font-size:11px">${desc}</div></div></div>`;
-  $('#orchConfig').innerHTML = `
-    <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(240px,1fr));gap:12px">
-      ${sw('enabled','Loop 编排总开关','开启后任务自动拆解→派发→验收→续步')}
-      ${sw('crossClient','跨 Client 子 Agent','允许派发给 Codex/Devin 等其他 Agent CLI（需各自已登录）')}
-      ${sw('autoContinue','自动续步','任务完成后自动规划下一步优化，持续推进项目')}
-    </div>
-    <div style="display:flex;gap:8px;flex-wrap:wrap;margin-top:12px;align-items:center">
-      <span class="muted">规划模型(固定不切换):</span>
-      <select id="orchModel" style="width:auto">${['auto','simple','coding','complex','expert'].map(m=>`<option ${c.planner?.model===m?'selected':''}>${m}</option>`).join('')}</select>
-      <span class="muted">并发:</span><input id="orchConc" type="number" min="1" max="4" value="${c.maxConcurrent||2}" style="width:60px">
-      <span class="muted">续步上限:</span><input id="orchMaxCont" type="number" min="0" max="20" value="${c.maxContinuations??5}" style="width:60px">
-      <button class="ghost" onclick="orchSaveParams()">保存参数</button>
-      <span class="muted" style="margin-left:auto">子 Agent: ${agents.map(a=>`<span class="badge ${a.available?'':'off'}">${a.label}${a.available?'':'(不可用)'}</span>`).join(' ')}</span>
-    </div>`;
-  $('#orchCount').textContent = `${tasks.length} 个任务`;
-  const stColor = {pending:'#a8a29e',planning:'#a8741a',running:'#2f5f8f',verifying:'#6d4a8f',done:'#3e7c4f',failed:'#a83226',blocked:'#a83226',paused:'#a8a29e'};
-  $('#orchList').innerHTML = tasks.length ? tasks.slice().reverse().map(t=>{
-    const steps = t.plan||[];
-    const stepRows = steps.map(s=>`<tr><td class="mono">${esc(s.id)}</td><td>${esc(s.title)}</td><td><span class="badge">${esc(s.agent)}</span>${s.needsDebate?' <span class="badge">辩论</span>':''}</td><td><span style="color:${stColor[s.status]||'#8b949e'}">${s.status}</span></td><td class="desc">${esc((s.result||'').slice(0,100))}</td></tr>`).join('');
-    const logs = (t.log||[]).slice(-6).map(l=>`<div class="mono" style="font-size:10.5px;color:var(--faint)">[${new Date(l.ts).toLocaleTimeString()}] ${esc(l.msg)}</div>`).join('');
-    return `<div class="card" style="margin-bottom:10px">
-      <div class="toolbar">
-        <b>${esc(t.goal.slice(0,80))}${t.goal.length>80?'…':''}</b>
-        ${t.parentId?'<span class="badge">续步</span>':''}
-        <span style="color:${stColor[t.status]||'#8b949e'};font-weight:600">${t.status}</span>
-        <span class="muted" style="margin-left:auto">${steps.filter(s=>s.status==='done').length}/${steps.length} 步完成</span>
-        <button class="ghost" data-act="orch-pause" data-id="${t.id}" ${t.status==='paused'?'disabled':''}>暂停</button>
-        <button class="ghost" data-act="orch-resume" data-id="${t.id}" ${t.status!=='paused'?'disabled':''}>继续</button>
-        ${t.status==='awaiting_review'?`<button class="ghost" style="color:var(--ok,#3fb950)" data-act="orch-review-pass" data-id="${t.id}">裁决·通过</button><button class="ghost" data-act="orch-review-retry" data-id="${t.id}">再返工</button><button class="ghost danger" data-act="orch-review-abort" data-id="${t.id}">终止</button>`:''}
-        <button class="ghost danger" data-act="orch-stop" data-id="${t.id}">停止</button>
-        <button class="ghost danger" data-act="orch-del" data-id="${t.id}">删除</button>
-      </div>
-      ${t.summary?`<div class="desc" style="margin:6px 0">验收: ${esc(t.summary.slice(0,300))}</div>`:''}
-      ${stepRows?`<table class="mini-table"><tr><th>ID</th><th>步骤</th><th>Agent</th><th>状态</th><th>结果</th></tr>${stepRows}</table>`:''}
-      ${logs?`<div class="fold open"><button class="fold-head" type="button"><span class="chev">▶</span>日志<span class="n">${(t.log||[]).length}</span></button><div class="fold-body"><div class="fold-inner" style="padding:6px 4px">${logs}</div></div></div>`:''}
-    </div>`;
-  }).join('') : '<div class="empty">暂无任务 — 在上方创建一个目标开始</div>';
+  orchCfg = cfgR.config || {}; orchAgents = cfgR.agents || [];
+  if($('#orchDrawer')?.classList.contains('show')) renderOrchConfig();
+  const tasks = (taskR.tasks || []).slice().sort((a,b)=>(b.createdAt||0)-(a.createdAt||0));
+  renderOrchTop(tasks); renderOrchList(tasks); renderOrchComposer();
+  initOrchChat();
+  if(orchSelId && tasks.some(t=>t.id===orchSelId)) await renderOrchDetail(orchSelId, false);
+  else if(tasks.length){ orchSelId = tasks[0].id; await renderOrchDetail(orchSelId, true); }
+  else { orchSelId = null; orchChatTask = null; const dc=$('#orchChatEl'); if(dc&&orchChatReady){ dc.history=[]; dc.refreshMessages(); } }
   clearTimeout(orchTimer);
   if($('#tab-orch').style.display!=='none') orchTimer = setTimeout(loadOrch, 8000);
 }
+
+function renderOrchTop(tasks){
+  const c = orchCfg||{};
+  const active = (tasks||[]).filter(t=>['pending','planning','running','verifying'].includes(t.status)).length;
+  $('#orchTopStatus').textContent =
+    (c.enabled?'编排已开启':'编排已关闭') +
+    (c.crossClient?' · 跨 Client':' · 单 Client:'+(c.workerClient||'hermes')) +
+    (active?` · ${active} 个任务进行中`:'');
+}
+
+function renderOrchList(tasks){
+  $('#orchCount').textContent = tasks.length ? tasks.length+' 个' : '';
+  if(!tasks.length){ $('#orchList').innerHTML='<div class="empty">暂无任务</div>'; return; }
+  $('#orchList').innerHTML = tasks.map(t=>{
+    const steps = t.plan||[];
+    const done = steps.filter(s=>s.status==='done').length;
+    return `<button class="orch-item ${t.id===orchSelId?'sel':''}" data-act="orch-sel" data-id="${t.id}">
+      <div class="oi-goal">${esc(t.goal)}</div>
+      <div class="oi-meta"><span class="oi-dot" style="background:${orchStColor(t.status)}"></span>${ORCH_ST_TXT[t.status]||t.status}${steps.length?` · ${done}/${steps.length}步`:''}${t.parentId?' · 续':''} · ${orchTime(t.createdAt)}</div>
+    </button>`;
+  }).join('');
+}
+
+function renderOrchComposer(){
+  const sel = $('#orchClient'); if(!sel) return;
+  const cur = sel.value;
+  sel.innerHTML = '<option value="">自动</option>' + orchAgents.map(a=>
+    `<option value="${a.id}" ${a.available?'':'disabled'}>${esc(a.label||a.id)}${a.available?'':'（不可用）'}</option>`).join('');
+  sel.value = cur;
+}
+
+function renderOrchTaskBar(t){
+  const steps = t.plan||[];
+  const done = steps.filter(s=>s.status==='done').length;
+  const active = ['pending','planning','running','verifying'].includes(t.status);
+  $('#orchTaskBar').innerHTML = `
+    <div class="tb-goal">${esc(t.goal)}<span class="muted">${t.id}${t.client?' · '+esc(t.client):''}${t.parentId?' · 续步':''} · ${done}/${steps.length}步</span></div>
+    <div class="tb-ctrl">
+      <span class="badge" style="color:${orchStColor(t.status)};border-color:${orchStColor(t.status)}">${ORCH_ST_TXT[t.status]||t.status}</span>
+      ${t.summary?`<span class="muted" style="font-size:11px;max-width:40%;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${esc(t.summary.slice(0,80))}</span>`:''}
+      <span class="sp"></span>
+      <button class="ghost" data-act="orch-pause" data-id="${t.id}" ${t.status==='paused'||!active?'disabled':''}>暂停</button>
+      <button class="ghost" data-act="orch-resume" data-id="${t.id}" ${['paused','blocked','failed'].includes(t.status)?'':'disabled'}>继续</button>
+      <button class="ghost danger" data-act="orch-stop" data-id="${t.id}" ${['done','failed'].includes(t.status)?'disabled':''}>停止</button>
+      <button class="ghost danger" data-act="orch-del" data-id="${t.id}">删除</button>
+    </div>
+    ${t.status==='awaiting_review'?`<div class="orch-review-inline" style="display:flex;gap:8px;align-items:center;padding:8px 10px;border:1px solid var(--accent-line);border-radius:var(--r-sm);background:var(--accent-soft);font-size:12px">
+      <span class="muted" style="flex:1">验收未通过，等待人工裁决（24h 超时自动终止）</span>
+      <button class="btn" data-act="orch-review-pass" data-id="${t.id}">通过</button>
+      <button class="ghost" data-act="orch-review-retry" data-id="${t.id}">再返工</button>
+      <button class="ghost danger" data-act="orch-review-abort" data-id="${t.id}">终止</button>
+    </div>`:''}`;
+}
+
+const STEP_ICON = {done:'✅',running:'🔵',failed:'❌',pending:'⚪',paused:'⏸'};
+function orchBuildMessages(t){
+  const msgs = [];
+  msgs.push({role:'user', text: t.goal + (t.workdir?`\n\n工作目录: ${t.workdir}`:'')});
+  const steps = t.plan||[];
+  if(steps.length){
+    msgs.push({role:'planner', text:'**执行计划**\n'+steps.map(s=>
+      `${STEP_ICON[s.status]||'⚪'} \`${s.id}\` ${s.title} → ${s.agent||'?'}${s.needsDebate?' ⚔️辩论':''}`).join('\n')});
+  }
+  const feed = [
+    ...steps.filter(s=>s.ts).map(s=>({ts:s.ts, kind:'step', s})),
+    ...(t.log||[]).map(l=>({ts:l.ts, kind:'log', l})),
+  ].sort((a,b)=>a.ts-b.ts);
+  for(const ev of feed){
+    if(ev.kind==='log'){
+      const lv = ev.l.level==='warn'?'⚠️ ':ev.l.level==='error'?'⛔ ':'';
+      msgs.push({role:'system', text:`${orchTime(ev.l.ts)} ${lv}${ev.l.msg}`});
+    } else {
+      const s = ev.s, st = ORCH_ST_TXT[s.status]||s.status;
+      let txt = `**${s.id} · ${s.title}** — ${st} · ${s.agent||''}${s.needsDebate?' · 辩论':''}`;
+      if(s.result) txt += `\n\n${String(s.result).slice(0,4000)}`;
+      msgs.push({role: ORCH_AGENT_ROLE[s.agent] || 'ai', text: txt});
+    }
+  }
+  if(t.summary) msgs.push({role:'planner', text:'**验收总结**\n'+t.summary});
+  return msgs;
+}
+
+async function renderOrchDetail(id, forceScroll){
+  let t;
+  try { const r = await api(`/api/orchestrator/tasks/${id}`); t = r.task; } catch { return; }
+  if(!t) return;
+  renderOrchTaskBar(t);
+  const dc = document.getElementById('orchChatEl');
+  if(!dc || !orchChatReady) return;
+  const msgs = orchBuildMessages(t);
+  const grew = orchChatTask !== id || msgs.length > orchChatCount;
+  orchChatTask = id; orchChatCount = msgs.length;
+  dc.history = msgs;
+  dc.refreshMessages();
+  if(forceScroll || grew) dc.scrollToBottom();
+}
+
 async function orchReview(id, action){
   await api(`/api/orchestrator/tasks/${id}/review`,{method:'POST',body:{action}});
   toast('人工裁决: '+action); loadOrch();
 }
-async function orchSet(k,v){ await api('/api/orchestrator/config',{method:'PUT',body:{[k]:v}}); toast(k+' → '+v); }
-async function orchSaveParams(){
-  await api('/api/orchestrator/config',{method:'PUT',body:{maxConcurrent:+$('#orchConc').value||2,maxContinuations:+$('#orchMaxCont').value??5,planner:{model:$('#orchModel').value}}});
-  toast('参数已保存'); loadOrch();
-}
+async function orchSet(k,v){ await api('/api/orchestrator/config',{method:'PUT',body:{[k]:v}}); toast(k+' → '+v); loadOrch(); }
+async function orchSetNum(k,v){ await api('/api/orchestrator/config',{method:'PUT',body:{[k]:+v}}); toast(k+' 已保存'); }
 async function orchCreate(){
   const goal=$('#orchGoal').value.trim(); if(!goal){toast('请输入任务目标',true);return;}
-  const r=await api('/api/orchestrator/tasks',{method:'POST',body:{goal,workdir:$('#orchWorkdir').value.trim()||undefined}});
+  const client=$('#orchClient')?$('#orchClient').value:'';
+  const r=await api('/api/orchestrator/tasks',{method:'POST',body:{goal,workdir:$('#orchWorkdir').value.trim()||undefined,client:client||undefined}});
   if(r.error){toast(r.error,true);return;}
-  $('#orchGoal').value=''; toast('任务已创建: '+r.task.id); loadOrch();
+  $('#orchGoal').value=''; orchSelId=r.task.id; toast('任务已创建: '+r.task.id); loadOrch();
 }
 async function orchAction(id,act){ await api(`/api/orchestrator/tasks/${id}/${act}`,{method:'POST',body:{}}); loadOrch(); }
-async function orchDel(id){ if(!confirm('删除该任务及其记录？'))return; await api(`/api/orchestrator/tasks/${id}`,{method:'DELETE'}); loadOrch(); }
+async function orchDel(id){ if(!confirm('删除该任务及其记录？'))return; await api(`/api/orchestrator/tasks/${id}`,{method:'DELETE'}); orchSelId=null; loadOrch(); }
+function toggleOrchSettings(){
+  const d = $('#orchDrawer'), m = $('#orchSetMask');
+  const open = !d.classList.contains('show');
+  d.classList.toggle('show', open); m.classList.toggle('show', open);
+  if(open && orchCfg) renderOrchConfig();
+}
+function renderOrchConfig(){
+  const c = orchCfg||{};
+  const sw = (key,label,desc)=>`<div class="orch-set-row"><label class="switch"><input type="checkbox" ${c[key]?'checked':''} onchange="orchSet('${key}',this.checked)"><span class="sl"></span></label><div class="sr-txt"><b>${label}</b><span class="muted">${desc}</span></div></div>`;
+  const num = (key,label,desc,unit,min,max)=>`<div class="orch-set-row"><div class="sr-txt"><b>${label}</b><span class="muted">${desc}</span></div><span class="orch-num">${unit?unit+' ':''}<input type="number" min="${min}" max="${max}" value="${c[key]??''}" onchange="orchSetNum('${key}',this.value)"></span></div>`;
+  $('#orchConfig').innerHTML = `
+    <h3>编排设置</h3><div class="od-sub">改动即时生效</div>
+    <div class="orch-set-group"><h4>开关</h4>
+      ${sw('enabled','Loop 编排总开关','开启后任务自动拆解→派发→验收→续步')}
+      ${sw('crossClient','跨 Client 子 Agent','允许步骤派给 Codex/Devin 等其他 Agent CLI')}
+      ${sw('autoContinue','自动续步','任务完成后自动规划下一步优化，持续推进')}
+    </div>
+    <div class="orch-set-group"><h4>执行</h4>
+      <div class="orch-set-row"><div class="sr-txt"><b>单 Client 模式</b><span class="muted">跨 Client 关闭时，所有子任务统一由该 Client 完成；任务创建时也可单独指定</span></div>
+        <select onchange="orchSet('workerClient',this.value)">${['hermes','codex','devin'].map(w=>`<option value="${w}" ${c.workerClient===w?'selected':''}>${w}</option>`).join('')}</select></div>
+      <div class="orch-set-row"><div class="sr-txt"><b>规划 / 验收模型</b><span class="muted">固定走自由路由，由本地路由器按任务复杂度自动分级</span></div><span class="badge on">auto</span></div>
+    </div>
+    <div class="orch-set-group"><h4>参数</h4>
+      ${num('maxConcurrent','最大并发','同时运行的子 Agent 数','个',1,4)}
+      ${num('maxContinuations','续步上限','自动续步最大次数','次',0,20)}
+      ${num('tickSeconds','调度间隔','引擎检查周期','秒',5,120)}
+      ${num('maxRepairs','返工上限','验收失败后自动返工轮数','轮',0,10)}
+      <div class="orch-set-row"><div class="sr-txt"><b>单步超时</b><span class="muted">子 Agent 单步最长运行时间</span></div><span class="orch-num">分钟 <input type="number" min="1" max="60" value="${Math.round((c.dispatchTimeoutMs||0)/60000)}" onchange="orchSetNum('dispatchTimeoutMs',this.value*60000)"></span></div>
+    </div>
+    <div class="orch-set-group"><h4>子 Agent 可用性</h4>
+      <div class="orch-agents">${(orchAgents||[]).map(a=>`<span class="badge ${a.available?'on':''}" title="${esc(a.note||'')}">${esc(a.label||a.id)}${a.available?'':' · 不可用'}</span>`).join(' ')||'<span class="muted">加载中…</span>'}</div>
+    </div>
+    <div class="orch-planner">提示：子 Agent 以本机 CLI 无头模式运行（hermes -z / codex exec / devin -p），工作目录默认为任务工作目录。</div>`;
+}
 
 // ---------- 事件委托 ----------
 document.addEventListener('click', e => {
@@ -903,6 +1041,7 @@ document.addEventListener('click', e => {
   if(act==='skill-inspect'){ skillInspect(d.name); return; }
   if(act==='skill-toggle'){ skillToggle(d.name, d.disabled==='true'); return; }
   if(act==='skill-uninstall'){ skillUninstall(d.name); return; }
+  if(act==='orch-sel'){ orchSelId = d.id; orchChatTask=null; loadOrch(); return; }
   if(act==='orch-pause'){ orchAction(d.id,'pause'); return; }
   if(act==='orch-resume'){ orchAction(d.id,'resume'); return; }
   if(act==='orch-stop'){ orchAction(d.id,'stop'); return; }

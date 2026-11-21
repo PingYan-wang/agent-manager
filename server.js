@@ -4,7 +4,8 @@
 import http from 'node:http';
 import https from 'node:https';
 import { execFile, spawn } from 'node:child_process';
-import { readFile, readdir, stat, mkdir, symlink, realpath, lstat, writeFile, unlink } from 'node:fs/promises';
+import { readFile, readdir, stat, mkdir, symlink, realpath, lstat, writeFile, unlink, mkdtemp, cp, rm } from 'node:fs/promises';
+import { tmpdir } from 'node:os';
 import { watch } from 'node:fs';
 import { initOrchestrator, handleOrchestratorApi } from './orchestrator.js';
 import { config, HOME, DATA_DIR } from './config.js';
@@ -83,6 +84,131 @@ function runCmd(bin, args, timeoutMs = 30000) {
 }
 
 let balanceCache = null;
+
+// 市场来源（skills.sh 等）生成的 github:owner/repo:skills/<id> 路径可能与仓库实际布局不符。
+// 安装报 "No SKILL.md found" 时，按 GitHub API 定位真实 SKILL.md 所在目录后重试。
+async function resolveGithubSkillPath(source) {
+  const m = String(source || '').match(/^github:([^/:\s]+)\/([^/:\s]+)(?::(.+))?$/);
+  if (!m || !m[3]) return null;
+  const [, owner, repo] = m;
+  try {
+    const repoRes = await fetch(`https://api.github.com/repos/${owner}/${repo}`, {
+      headers: { 'User-Agent': 'agent-manager', Accept: 'application/vnd.github+json' },
+      signal: AbortSignal.timeout(10000),
+    });
+    if (!repoRes.ok) return null;
+    const { default_branch: branch = 'main' } = await repoRes.json();
+    const treeRes = await fetch(`https://api.github.com/repos/${owner}/${repo}/git/trees/${encodeURIComponent(branch)}?recursive=1`, {
+      headers: { 'User-Agent': 'agent-manager', Accept: 'application/vnd.github+json' },
+      signal: AbortSignal.timeout(20000),
+    });
+    if (!treeRes.ok) return null;
+    const { tree = [], truncated } = await treeRes.json();
+    if (truncated) return null;
+    const skillMds = tree.filter((t) => t.type === 'blob' && /(^|\/)SKILL\.md$/i.test(t.path)).map((t) => t.path);
+    if (!skillMds.length) return null;
+    const want = m[3].split('/').filter(Boolean).pop().toLowerCase();
+    const dirOf = (p) => p.split('/').slice(0, -1).join('/');
+    const pick = skillMds.find((p) => dirOf(p).split('/').pop().toLowerCase() === want)
+      || skillMds.find((p) => dirOf(p).toLowerCase().includes(want))
+      || (skillMds.length === 1 ? skillMds[0] : null);
+    if (!pick) return null;
+    const fixed = `github:${owner}/${repo}:${dirOf(pick)}`;
+    return fixed === source ? null : fixed;
+  } catch { return null; }
+}
+
+async function asmInstallWithPathFix(source, args) {
+  let r = await asmRun(args, 300000);
+  if (r.code !== 0 && /No SKILL\.md/i.test(`${r.stdout}\n${r.stderr}`)) {
+    const fixed = await resolveGithubSkillPath(source);
+    if (fixed) {
+      r = await asmRun(args.map((a) => (a === source ? fixed : a)), 300000);
+      if (r.code === 0) return { r, usedSource: fixed };
+    }
+  }
+  return { r, usedSource: source };
+}
+
+const GH_HEADERS = { 'User-Agent': 'agent-manager', Accept: 'application/vnd.github+json' };
+
+async function githubRepoInfo(owner, repo) {
+  const r = await fetch(`https://api.github.com/repos/${owner}/${repo}`, { headers: GH_HEADERS, signal: AbortSignal.timeout(10000) });
+  if (!r.ok) return null;
+  const d = await r.json();
+  return { branch: d.default_branch || 'main' };
+}
+
+async function findSkillDirs(root, maxDepth = 5) {
+  const out = [];
+  const walk = async (dir, depth) => {
+    if (depth > maxDepth || out.length > 50) return;
+    let entries;
+    try { entries = await readdir(dir, { withFileTypes: true }); } catch { return; }
+    if (entries.some((e) => e.isFile() && e.name.toLowerCase() === 'skill.md')) { out.push(dir); return; }
+    for (const e of entries) if (e.isDirectory() && !e.name.startsWith('.')) await walk(path.join(dir, e.name), depth + 1);
+  };
+  await walk(root, 0);
+  return out;
+}
+
+// github.com 的 git/https 端点在部分网络下不可达（api.github.com 与 codeload 正常），
+// asm 内部 git clone 会 60s 超时。此时改走 tarball 直装：下载压缩包 → 解压 →
+// 复制 SKILL.md 目录到 ~/.agents/skills（asm global scope），再由 syncAllSkills 铺到所有 Agent。
+async function installGithubSkillDirect(source) {
+  const m = String(source || '').match(/^(?:github:|https?:\/\/github\.com\/)([^/:\s]+)\/([^/:\s]+?)(?:\.git)?(?::(.+))?$/);
+  if (!m) return null;
+  const [, owner, repo, rawPath] = m;
+  const info = await githubRepoInfo(owner, repo);
+  if (!info) return { error: 'GitHub API 访问失败' };
+  const tmp = await mkdtemp(path.join(tmpdir(), 'ghskill-'));
+  try {
+    const tarPath = path.join(tmp, 'repo.tar.gz');
+    const dl = await fetch(`https://api.github.com/repos/${owner}/${repo}/tarball/${encodeURIComponent(info.branch)}`, {
+      headers: GH_HEADERS, signal: AbortSignal.timeout(180000), redirect: 'follow',
+    });
+    if (!dl.ok) return { error: `tarball 下载失败 HTTP ${dl.status}` };
+    await writeFile(tarPath, Buffer.from(await dl.arrayBuffer()));
+    await new Promise((res, rej) => execFile('tar', ['-xzf', tarPath, '-C', tmp], (e) => (e ? rej(e) : res())));
+    const top = (await readdir(tmp)).find((d) => d !== 'repo.tar.gz');
+    if (!top) return { error: 'tarball 解压为空' };
+    const repoRoot = path.join(tmp, top);
+    let candidates;
+    if (rawPath) {
+      const p = path.join(repoRoot, rawPath);
+      candidates = await findSkillDirs(p, 2);
+      if (!candidates.length) {
+        try { await stat(path.join(p, 'SKILL.md')); candidates = [p]; } catch { /* 无 */ }
+      }
+    }
+    // market 生成的路径经常与仓库实际布局不符（如 skills/x 实为 plugins/y/skills/x），
+    // 路径落空时回退到全仓库搜索，再按目录名匹配
+    if (!candidates || !candidates.length) candidates = await findSkillDirs(repoRoot);
+    if (!candidates.length) return { error: `仓库中未找到 SKILL.md${rawPath ? `（路径 ${rawPath}）` : ''}` };
+    const want = rawPath ? rawPath.split('/').filter(Boolean).pop().toLowerCase() : '';
+    const pick = candidates.find((d) => path.basename(d).toLowerCase() === want)
+      || (candidates.length === 1 ? candidates[0] : null);
+    if (!pick) return { error: `找到 ${candidates.length} 个 skill，无法确定目标` };
+    const name = path.basename(pick);
+    const targetRoot = path.join(HOME, '.agents', 'skills');
+    const dest = path.join(targetRoot, name);
+    if (await exists(dest)) return { ok: true, name, path: dest, note: '已存在，跳过复制' };
+    await mkdir(targetRoot, { recursive: true });
+    await cp(pick, dest, { recursive: true });
+    return { ok: true, name, path: dest };
+  } finally {
+    await rm(tmp, { recursive: true, force: true }).catch(() => {});
+  }
+}
+
+let githubGitOk = null; // github.com git 端点探测缓存；不可达时跳过 asm 的 60s clone 超时
+function githubGitReachable() {
+  if (githubGitOk !== null) return Promise.resolve(githubGitOk);
+  githubGitOk = new Promise((resolve) => {
+    execFile('git', ['ls-remote', 'https://github.com/git/git.git', 'HEAD'], { timeout: 12000 }, (e) => resolve(!e));
+  });
+  return githubGitOk;
+}
 
 const tryJson = (text) => {
   try {
@@ -477,7 +603,18 @@ async function syncAllSkills() {
       }
     }
   }
-  return { sources: sources.length, targets: targets.length, created, skipped: skipped.length, errors };
+  // 清理目标目录里指向不存在源的死链接（卸载/源删除后的残留）
+  let cleaned = 0;
+  for (const dir of targets) {
+    let entries;
+    try { entries = await readdir(dir, { withFileTypes: true }); } catch { continue; }
+    for (const e of entries) {
+      if (!e.isSymbolicLink()) continue;
+      const dest = path.join(dir, e.name);
+      if (!(await exists(dest))) { await unlink(dest).catch(() => {}); cleaned++; }
+    }
+  }
+  return { sources: sources.length, targets: targets.length, created, skipped: skipped.length, cleaned, errors };
 }
 
 // ---------- Agent 底层指令注入（AGENTS.md / 全局规则） ----------
@@ -1405,12 +1542,47 @@ const routes = [...routerMgmtRoutes,
     json(res, data ? 200 : 500, data || { error: 'inspect 失败', stdout: r.stdout, stderr: r.stderr });
   }],
   ['POST', /^\/api\/skills\/install$/, async (req, res, body) => {
-    const { source, tool = 'all', scope = 'global' } = body || {};
+    let { source, tool = 'all', scope = 'global' } = body || {};
     if (!source) return json(res, 400, { error: '缺少 source' });
-    const args = ['install', String(source), '-s', scope, '-p', tool, '-y', '--json'];
-    const r = await asmRun(args, 300000);
+    source = String(source).trim().replace(/^asm\s+install\s+/i, '');
+    const args = ['install', source, '-s', scope, '-p', tool, '-y', '--json'];
+    const { r } = await asmInstallWithPathFix(source, args);
     const data = tryJson(r.stdout);
-    json(res, r.code === 0 ? 200 : 500, { code: r.code, result: data, stdout: r.stdout.slice(-4000), stderr: r.stderr.slice(-2000) });
+    // 安装成功后自动同步到所有 Agent skill 目录
+    const synced = r.code === 0 ? await syncAllSkills() : null;
+    json(res, r.code === 0 ? 200 : 500, { code: r.code, result: data, synced, stdout: r.stdout.slice(-4000), stderr: r.stderr.slice(-2000) });
+  }],
+  ['POST', /^\/api\/skills\/quick-install$/, async (req, res, body) => {
+    // 市场一键安装：global scope + 全部 provider + 自动同步；
+    // github.com git 端点不可达时跳过 asm 的 60s clone 超时，直接 tarball 直装。
+    let { source } = body || {};
+    if (!source) return json(res, 400, { error: '缺少 source' });
+    source = String(source).trim().replace(/^asm\s+install\s+/i, '');
+    const isGithub = /^(?:github:|https?:\/\/github\.com\/)/.test(source);
+    let r = null, usedSource = source, via = 'asm';
+    if (isGithub && !(await githubGitReachable())) {
+      const direct = await installGithubSkillDirect(source);
+      if (direct && direct.ok) {
+        const synced = await syncAllSkills();
+        return json(res, 200, { code: 0, via: 'github-tarball', installed: direct.name, synced });
+      }
+      via = direct && direct.error ? `直装失败: ${direct.error}` : '直装不可用';
+    }
+    if (!r) {
+      const args = ['install', source, '-s', 'global', '-p', 'all', '-y', '--json'];
+      ({ r, usedSource } = await asmInstallWithPathFix(source, args));
+    }
+    if (r.code !== 0 && isGithub) {
+      const direct = await installGithubSkillDirect(usedSource);
+      if (direct && direct.ok) {
+        const synced = await syncAllSkills();
+        return json(res, 200, { code: 0, via: 'github-tarball', installed: direct.name, synced });
+      }
+      if (direct && direct.error && via === 'asm') via = `asm失败+直装失败: ${direct.error}`;
+    }
+    const data = tryJson(r.stdout);
+    const synced = r.code === 0 ? await syncAllSkills() : null;
+    json(res, r.code === 0 ? 200 : 500, { code: r.code, via, resolvedSource: usedSource !== source ? usedSource : undefined, result: data, synced, stdout: r.stdout.slice(-4000), stderr: r.stderr.slice(-2000) });
   }],
   ['POST', /^\/api\/skills\/import-path$/, async (req, res, body) => {
     // 从本地路径安装/链接 skill（已安装在其他 agent 的 skill）
@@ -1421,7 +1593,8 @@ const routes = [...routerMgmtRoutes,
       : ['install', String(p), '-s', scope, '-p', tool, '-y', '--json'];
     const r = await asmRun(args, 120000);
     const data = tryJson(r.stdout);
-    json(res, r.code === 0 ? 200 : 500, { code: r.code, result: data, stdout: r.stdout.slice(-4000), stderr: r.stderr.slice(-2000) });
+    const synced = r.code === 0 ? await syncAllSkills() : null;
+    json(res, r.code === 0 ? 200 : 500, { code: r.code, result: data, synced, stdout: r.stdout.slice(-4000), stderr: r.stderr.slice(-2000) });
   }],
   ['POST', /^\/api\/skills\/sync-all$/, async (req, res) => {
     json(res, 200, await syncAllSkills());
