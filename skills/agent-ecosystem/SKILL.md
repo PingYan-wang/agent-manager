@@ -40,6 +40,7 @@ description: 本机 Agent 生态系统的统一能力入口。当用户提到其
 `agent` 参数取值：`hermes` / `devin` / `codex` / `workbuddy` 等。读**自己**的历史对话就用自己的 agent 名（例如你是 Devin 就传 `devin`）；读其他 Agent 的对话同理换名字。会话 id 支持前缀匹配。内容默认截断 30000 字符。
 
 典型用法：
+- **【先查后做·最重要】** 用户提到其他 Agent、其他项目、某个目录/仓库的来历、之前的方案或结论，或任务需要复用别人做过的工作时——**先 `conversations_search` 搜遍会话再动手**，不要直接去文件系统里翻/猜或从零重做；搜不到再 `memory_search` 查共享记忆库。这是本 skill 存在的首要原因
 - 用户说"继续之前那个对话/看看 hermes 昨天聊了什么/上次 codex 做了什么"→ `conversations_list` 找 id → `conversation_read` 读内容 → 接着上下文继续工作
 - 用户说"之前是不是研究过 XX/找一下关于 YY 的讨论"→ `conversations_search` 一把搜全部 Agent 的会话，拿到 agent+id 再 `conversation_read` 细读
 - 完成有沉淀价值的任务后 → `memory_save` 写一条笔记（标题+结论+标签）；之后任何 Agent 都能 `memory_search` 找到，实现跨 Agent/跨会话的记忆继承

@@ -396,34 +396,34 @@ def dispatch(method, params):
     if method == "tools/list":
         return {"tools": [
             {"name": "agents_list",
-             "description": "列出本机有会话记录可读的 Agent 及数据源说明",
+             "description": "【触发条件】用户提到其他 Agent、其他项目、之前的对话或历史工作，或你拿不准上下文来源时，先调用本工具了解本机有哪些 Agent 留下了可读的会话记录，再决定用 conversations_search/conversation_read 继承上下文，避免从零重复劳动",
              "inputSchema": {"type": "object", "properties": {}}},
             {"name": "conversations_list",
-             "description": "列出某个 Agent 的最近会话(id/标题/时间)。agent: hermes|devin|codex|workbuddy",
+             "description": "【触发条件】已知要查某个 Agent 的历史会话列表时使用（如用户说「看看 Devin 上次聊了什么」）。agent: hermes|devin|codex|workbuddy。不确定关键词在哪个会话时改用 conversations_search",
              "inputSchema": {"type": "object", "properties": {
                  "agent": {"type": "string"}, "limit": {"type": "integer", "default": 20}},
                  "required": ["agent"]}},
             {"name": "conversation_read",
-             "description": "读取某个 Agent 的会话内容。agent 同上; id 来自 conversations_list,支持前缀匹配",
+             "description": "【触发条件】conversations_search/list 已定位到目标会话后，用它读取完整上下文再继续工作。支持前缀匹配 id",
              "inputSchema": {"type": "object", "properties": {
                  "agent": {"type": "string"}, "id": {"type": "string"},
                  "max_chars": {"type": "integer", "default": MAX_CHARS}},
                  "required": ["agent", "id"]}},
             {"name": "conversations_search",
-             "description": "按关键词搜索会话内容（标题+消息）。agent 留空=搜全部 Agent。用于记忆继承：不确定在哪个会话时先搜索定位",
+             "description": "【触发条件·最常用】用户提到其他 Agent 做过的事、其他项目、某个目录/仓库的来历、之前的方案或结论，或任务需要复用他人工作时——先用本工具按关键词搜遍全部 Agent 会话，命中后再 conversation_read 细读。这是记忆继承的第一入口，不要直接去文件系统里猜",
              "inputSchema": {"type": "object", "properties": {
                  "query": {"type": "string"}, "agent": {"type": "string"},
                  "limit": {"type": "integer", "default": 10}},
                  "required": ["query"]}},
             {"name": "memory_save",
-             "description": "把一条结论/笔记写入共享记忆库（~/.agent-manager/memory.jsonl），供其他 Agent 或未来会话检索。完成有价值的任务后建议沉淀",
+             "description": "【触发条件】完成有价值的排查/配置/结论后，把可复用的结论写入共享记忆库，供其他 Agent 或你自己的未来会话检索。一次任务只需沉淀一次",
              "inputSchema": {"type": "object", "properties": {
                  "agent": {"type": "string", "description": "写入方 Agent 名"},
                  "title": {"type": "string"}, "content": {"type": "string"},
                  "tags": {"type": "array", "items": {"type": "string"}}},
                  "required": ["agent", "content"]}},
             {"name": "memory_search",
-             "description": "搜索共享记忆库。query 关键词，agent 可选过滤来源，返回最近匹配",
+             "description": "【触发条件】conversations_search 没命中、或想找更早沉淀的结论/笔记时使用。会话存原始记录，记忆库存提炼后的结论，两者配合",
              "inputSchema": {"type": "object", "properties": {
                  "query": {"type": "string"}, "agent": {"type": "string"},
                  "limit": {"type": "integer", "default": 10}},
