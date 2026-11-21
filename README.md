@@ -47,15 +47,15 @@
 
 ## 功能一览
 
-| 功能 | 一句话 | 详细文档 |
-|---|---|---|
-| 🧠 **跨 Agent 对话与记忆继承** | 任一 Agent 可搜索 / 读取其他 Agent 的会话，结论写入共享记忆库 | [cross-agent-memory.md](docs/cross-agent-memory.md) |
-| ♻️ **MCPHub 网关与路径复用** | 所有 MCP 汇入一个网关；一个对话的实现路径沉淀为全员能力 | [mcp-gateway.md](docs/mcp-gateway.md) |
-| 🧩 **Skill 统一同步** | Skill 装一次铺到所有 Agent，市场一键安装 | [skills.md](docs/skills.md) |
-| 🧭 **LLM 智能路由** | simple / coding / complex / expert 分级分流，会话粘性，预算熔断 | [routing.md](docs/routing.md) |
-| 🔀 **反向代理 / 统一入口** | 一个入口聚合所有本地服务与 LLM 上游，SSE 流式透传 | [proxy.md](docs/proxy.md) |
-| 🌳 **多 Agent 任务编排** | 子 Agent 池、跨 Client 调度、执行树、失败自愈、自动续步 loop | [orchestration.md](docs/orchestration.md) |
-| 📊 **用量看板与巡检日报** | 用量下钻、服务商视图、7 天趋势、每日自动体检 | [dashboard.md](docs/dashboard.md) |
+| 功能 | 一句话 |
+|---|---|
+| [🧠 **跨 Agent 对话与记忆继承**](docs/cross-agent-memory.md) | 任一 Agent 可搜索 / 读取其他 Agent 的会话，结论写入共享记忆库 |
+| [♻️ **MCPHub 网关与路径复用**](docs/mcp-gateway.md) | 所有 MCP 汇入一个网关；一个对话的实现路径沉淀为全员能力 |
+| [🧩 **Skill 统一同步**](docs/skills.md) | Skill 装一次铺到所有 Agent，市场一键安装 |
+| [🧭 **LLM 智能路由**](docs/routing.md) | simple / coding / complex / expert 分级分流，会话粘性，预算熔断 |
+| [🔀 **反向代理 / 统一入口**](docs/proxy.md) | 一个入口聚合所有本地服务与 LLM 上游，SSE 流式透传 |
+| [🌳 **多 Agent 任务编排**](docs/orchestration.md) | 子 Agent 池、跨 Client 调度、递归拆解、执行树、失败自愈、自动续步 loop |
+| [📊 **用量看板与巡检日报**](docs/dashboard.md) | 用量下钻、服务商视图、7 天趋势、每日自动体检 |
 
 ---
 
@@ -195,6 +195,14 @@ docs/                   # 功能文档、截图、架构图
 - [ ] 独立 verify agent 验收
 - [ ] 编排 worker 角色化（researcher / reviewer / tester）
 - [ ] RouteLLM 本地路由模型
+
+## 致谢
+
+- 感谢 WorkBuddy「苏格拉底学习法」递归学习项目的设计灵感——执行树的主干/分叉视觉语言与「拆到能执行为止、再逐层整合」的递归拆解思路，均受其启发
+- 感谢 MCPHub 提供的跨 Agent 桥接与记忆基座，让「路径沉淀」成为可能
+- 感谢 Hermes / Codex / Devin 等开源 Agent 生态的开发者与使用者
+
+如果这个项目对你有帮助，欢迎 Star 与反馈 🙏
 
 ## License
 
