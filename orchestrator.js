@@ -237,8 +237,9 @@ async function stepTask(task) {
         task.status = 'running';
         return;
       }
-      task.status = 'failed';
-      log(task, 'error', '返工规划失败');
+      task.status = 'awaiting_review';
+      task.reviewDeadline = Date.now() + REVIEW_TIMEOUT_MS;
+      log(task, 'warn', '返工规划失败，转人工裁决（24h 超时自动终止）');
       return;
     }
     // planner 验收
@@ -256,10 +257,11 @@ async function stepTask(task) {
       if (d.action === 'repair' && Array.isArray(d.steps)) {
         for (const ns of d.steps) steps.push({ id: ns.id || `s${steps.length + 1}`, title: ns.title || '', agent: ns.agent || 'hermes', prompt: ns.prompt || '', deps: ns.deps || [], needsDebate: !!ns.needsDebate, status: 'pending' });
         task.status = 'running';
-      } else task.status = 'failed';
+      } else { task.status = 'awaiting_review'; task.reviewDeadline = Date.now() + REVIEW_TIMEOUT_MS; log(task, 'warn', '验收未通过，转人工裁决'); }
     } else {
-      task.status = 'failed';
-      log(task, 'error', '验收未通过且无法返工: ' + (v.feedback || JSON.stringify(v)).slice(0, 200));
+      task.status = 'awaiting_review';
+      task.reviewDeadline = Date.now() + REVIEW_TIMEOUT_MS;
+      log(task, 'warn', '验收未通过且无法自动返工，转人工裁决: ' + (v.feedback || JSON.stringify(v)).slice(0, 200));
     }
     return;
   }
@@ -349,6 +351,8 @@ export async function initOrchestrator() {
 
 export function orchConfig() { return state.config; }
 
+const REVIEW_TIMEOUT_MS = 24 * 3600 * 1000; // 人工裁决超时
+
 export async function handleOrchestratorApi(url, method, body) {
   const p = url.pathname;
   if (p === '/api/orchestrator/config' && method === 'GET') return { config: state.config, agents: await availableAgents() };
@@ -359,6 +363,11 @@ export async function handleOrchestratorApi(url, method, body) {
     return { ok: true, config: state.config };
   }
   if (p === '/api/orchestrator/tasks' && method === 'GET') {
+    const nowTs = Date.now();
+    for (const t of state.tasks) {
+      if (t.status === 'awaiting_review' && t.reviewDeadline && nowTs > t.reviewDeadline) { t.status = 'failed'; log(t, 'error', '人工裁决超时(24h)，自动终止'); dirty = true; }
+    }
+    if (dirty) await save();
     return { tasks: state.tasks.map((t) => ({ ...t, plan: (t.plan || []).map((s) => ({ ...s, result: s.result ? String(s.result).slice(0, 300) : s.result })) })) };
   }
   if (p === '/api/orchestrator/tasks' && method === 'POST') {
@@ -380,6 +389,14 @@ export async function handleOrchestratorApi(url, method, body) {
     if (method === 'POST' && action === 'pause') { t.status = 'paused'; dirty = true; }
     if (method === 'POST' && action === 'resume') { if (['paused', 'blocked', 'failed'].includes(t.status)) { t.status = 'pending'; t.error = undefined; } dirty = true; }
     if (method === 'POST' && action === 'stop') { t.status = 'failed'; log(t, 'warn', '手动停止'); dirty = true; }
+    if (method === 'POST' && action === 'review') {
+      const act = (body || {}).action;
+      if (act === 'pass') { t.status = 'done'; t.summary = (t.summary || '') + '（人工裁决通过）'; log(t, 'info', '人工裁决: 通过'); }
+      else if (act === 'retry') { t.status = 'pending'; t.repairs = 0; t.error = undefined; log(t, 'info', '人工裁决: 再返工'); }
+      else if (act === 'abort') { t.status = 'failed'; log(t, 'warn', '人工裁决: 终止'); }
+      else return { error: 'action 需为 pass/retry/abort' };
+      dirty = true;
+    }
     if (method === 'DELETE' && !action) { state.tasks = state.tasks.filter((x) => x.id !== t.id); dirty = true; }
     await save();
     return { ok: true, task: t };

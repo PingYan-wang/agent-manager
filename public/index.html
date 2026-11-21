@@ -127,6 +127,20 @@
   .subtab.active{color:var(--ink);font-weight:600}
   .subtab.active::after{content:"";position:absolute;left:14px;right:14px;bottom:-1px;height:2px;background:var(--accent)}
 
+  /* ---- 市场精选两栏 ---- */
+  .mkt-cols{display:grid;grid-template-columns:1fr 1fr;gap:22px}
+  @media (max-width:900px){.mkt-cols{grid-template-columns:1fr}}
+  .mkt-col-title{font-size:12px;font-weight:600;color:var(--muted);letter-spacing:.08em;margin-bottom:10px;display:flex;align-items:baseline;gap:8px}
+  .mkt-col-title .muted{font-weight:400;letter-spacing:0;font-size:11px}
+  .mkt-item{display:flex;align-items:flex-start;gap:10px;padding:9px 4px;border-bottom:1px solid var(--line)}
+  .mkt-item:last-child{border-bottom:none}
+  .mkt-item .mkt-main{flex:1;min-width:0}
+  .mkt-item .mkt-name{font-weight:600;font-size:12.5px}
+  .mkt-item .mkt-meta{color:var(--faint);font-size:11px;font-family:var(--mono);margin-top:1px}
+  .mkt-item .mkt-reason{color:var(--accent);font-size:11px;margin-top:3px}
+  .mkt-item .mkt-why{color:var(--muted);font-size:11px;margin-top:3px}
+  .mkt-empty{color:var(--faint);font-size:12px;padding:14px 4px}
+
   /* ---- Agent 卡片 ---- */
   .agent-grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(360px,1fr));gap:14px}
   .agent-card{
@@ -283,6 +297,22 @@ Dashboard:  http://localhost:3000  (账号见 MCPHub Dashboard)
     <div id="skView-market" style="display:none">
     <div class="card">
       <div class="toolbar">
+        <h3>精选</h3>
+        <button class="ghost" style="margin-left:auto" onclick="loadSkillMarket()">↻ 刷新</button>
+      </div>
+      <div class="mkt-cols">
+        <div>
+          <div class="mkt-col-title">必备 Skill<span class="muted">通用基础能力</span></div>
+          <div id="skillMktEss"><div class="empty">加载中…</div></div>
+        </div>
+        <div>
+          <div class="mkt-col-title">为你推荐<span class="muted" id="skillMktWhy"></span></div>
+          <div id="skillMktRec"><div class="empty">加载中…</div></div>
+        </div>
+      </div>
+    </div>
+    <div class="card">
+      <div class="toolbar">
         <select id="searchSrc"><option value="asm">asm 索引</option><option value="sh">skills.sh</option></select>
         <input id="skillSearch" placeholder="搜索 skill，如 playwright、code-review…" style="flex:1;min-width:240px" onkeydown="if(event.key==='Enter')searchSkills()">
         <button class="btn" onclick="searchSkills()">搜索</button>
@@ -417,8 +447,8 @@ function setSub(kind, view){
   $(main).style.display = view==='main' ? '' : 'none';
   $(market).style.display = view==='market' ? '' : 'none';
   if(view==='market'){
-    if(kind==='mcp' && !window._mcpMktLoaded) { window._mcpMktLoaded = true; loadMcpMarket(); }
-    if(kind==='skills' && !window._skMktLoaded) { window._skMktLoaded = true; }
+    if(kind==='mcp'){ window._mcpMktLoaded = true; loadMcpMarket(); }
+    if(kind==='skills'){ window._skMktLoaded = true; loadSkillMarket(); }
   }
 }
 document.addEventListener('click', e => {
@@ -609,8 +639,10 @@ async function searchMcpMarket(){
 async function loadMcpMarket(q){
   $('#mcpMktList').innerHTML='<div class="empty">加载中…</div>';
   const u = '/api/mcp-market' + (q && q.length>=3 ? '?q='+encodeURIComponent(q) : '');
-  const r = await api(u);
-  if(r.error){ $('#mcpMktList').innerHTML=`<div class="empty">加载失败: ${esc(r.error)}</div>`; return; }
+  let r;
+  try { r = await api(u); }
+  catch(e){ $('#mcpMktList').innerHTML=`<div class="empty">加载失败: ${esc(e.message||e)} <button class="ghost" onclick="loadMcpMarket('${(q||'').replace(/'/g,"\\'")}')">重试</button></div>`; return; }
+  if(r.error){ $('#mcpMktList').innerHTML=`<div class="empty">加载失败: ${esc(r.error)} <button class="ghost" onclick="loadMcpMarket()">重试</button></div>`; return; }
   const list = r.results||[];
   $('#mcpMktCount').textContent = `${list.length} 个服务`;
   if(!list.length){ $('#mcpMktList').innerHTML='<div class="empty">没有找到相关 MCP</div>'; return; }
@@ -734,12 +766,38 @@ async function syncAll(){
 function agentSkillAction(path, agentName, link){ openInstallModal(path, link); }
 
 // ---------- 市场 ----------
+function renderSkillMktItems(el, items, showReason){
+  if(!items || !items.length){ el.innerHTML='<div class="mkt-empty">暂无推荐</div>'; return; }
+  el.innerHTML = items.map(s=>`
+    <div class="mkt-item">
+      <div class="mkt-main">
+        <div class="mkt-name">${esc(s.name)}${s.installed?' <span class="badge on">已安装</span>':''}</div>
+        <div class="mkt-meta">${esc(s.source||'')}${s.installs!=null?' · '+Number(s.installs).toLocaleString()+' installs':''}</div>
+        ${showReason&&s.reason?`<div class="mkt-reason">${esc(s.reason)}</div>`:''}
+      </div>
+      ${s.installed?'':'<button class="btn install-btn" data-source="'+esc(s.installCommand||s.name)+'" style="flex:none">安装</button>'}
+    </div>`).join('');
+}
+async function loadSkillMarket(){
+  $('#skillMktEss').innerHTML='<div class="mkt-empty">加载中…</div>';
+  $('#skillMktRec').innerHTML='<div class="mkt-empty">加载中…</div>';
+  let r;
+  try { r = await api('/api/skills/market'); }
+  catch(e){ $('#skillMktEss').innerHTML='<div class="mkt-empty">加载失败</div>'; $('#skillMktRec').innerHTML='<div class="mkt-empty">加载失败</div>'; return; }
+  if(r.error){ $('#skillMktEss').innerHTML=`<div class="mkt-empty">${esc(r.error)}</div>`; return; }
+  renderSkillMktItems($('#skillMktEss'), r.essential||[], false);
+  renderSkillMktItems($('#skillMktRec'), r.recommended||[], true);
+  const sig = r.signals||{};
+  $('#skillMktWhy').textContent = sig.skills||sig.servers ? `基于 ${sig.skills||0} 个已装 skill 与 ${sig.servers||0} 个网关服务` : '';
+}
 async function searchSkills(){
   const q = $('#skillSearch').value.trim();
   if(!q) return;
   const src = $('#searchSrc').value;
   $('#marketList').innerHTML='<div class="empty">搜索中…</div>';
-  const r = src==='sh' ? await api('/api/skills/search-sh?q='+encodeURIComponent(q)) : await api('/api/skills/search?q='+encodeURIComponent(q));
+  let r;
+  try { r = src==='sh' ? await api('/api/skills/search-sh?q='+encodeURIComponent(q)) : await api('/api/skills/search?q='+encodeURIComponent(q)); }
+  catch(e){ $('#marketList').innerHTML=`<div class="empty">搜索失败: ${esc(e.message||e)}</div>`; return; }
   if(r.error){ $('#marketList').innerHTML=`<div class="empty">搜索失败: ${esc(r.error)}</div>`; return; }
   const list = (r.results||[]).slice();
   if(src==='sh') list.sort((a,b)=>(b.installs||0)-(a.installs||0)); // skills.sh 按安装量排序
@@ -787,6 +845,7 @@ async function loadOrch(){
         <span class="muted" style="margin-left:auto">${steps.filter(s=>s.status==='done').length}/${steps.length} 步完成</span>
         <button class="ghost" data-act="orch-pause" data-id="${t.id}" ${t.status==='paused'?'disabled':''}>暂停</button>
         <button class="ghost" data-act="orch-resume" data-id="${t.id}" ${t.status!=='paused'?'disabled':''}>继续</button>
+        ${t.status==='awaiting_review'?`<button class="ghost" style="color:var(--ok,#3fb950)" data-act="orch-review-pass" data-id="${t.id}">裁决·通过</button><button class="ghost" data-act="orch-review-retry" data-id="${t.id}">再返工</button><button class="ghost danger" data-act="orch-review-abort" data-id="${t.id}">终止</button>`:''}
         <button class="ghost danger" data-act="orch-stop" data-id="${t.id}">停止</button>
         <button class="ghost danger" data-act="orch-del" data-id="${t.id}">删除</button>
       </div>
@@ -797,6 +856,10 @@ async function loadOrch(){
   }).join('') : '<div class="empty">暂无任务 — 在上方创建一个目标开始</div>';
   clearTimeout(orchTimer);
   if($('#tab-orch').style.display!=='none') orchTimer = setTimeout(loadOrch, 8000);
+}
+async function orchReview(id, action){
+  await api(`/api/orchestrator/tasks/${id}/review`,{method:'POST',body:{action}});
+  toast('人工裁决: '+action); loadOrch();
 }
 async function orchSet(k,v){ await api('/api/orchestrator/config',{method:'PUT',body:{[k]:v}}); toast(k+' → '+v); }
 async function orchSaveParams(){
@@ -837,6 +900,9 @@ document.addEventListener('click', e => {
   if(act==='orch-resume'){ orchAction(d.id,'resume'); return; }
   if(act==='orch-stop'){ orchAction(d.id,'stop'); return; }
   if(act==='orch-del'){ orchDel(d.id); return; }
+  if(act==='orch-review-pass'){ orchReview(d.id,'pass'); return; }
+  if(act==='orch-review-retry'){ orchReview(d.id,'retry'); return; }
+  if(act==='orch-review-abort'){ orchReview(d.id,'abort'); return; }
 });
 
 // ---------- 自动路由 ----------
@@ -865,6 +931,12 @@ function renderRouterCfg(){
    <input id="rcProvUrl" placeholder="https://api.example.com/v1" style="width:250px">
    <input id="rcProvKey" type="password" placeholder="API Key" style="width:170px">
    <button class="ghost" onclick="rcAddProvider()">＋ 添加厂商</button></div>`;
+  const bgs = cfg.budgets || {};
+  h += '<div style="margin:10px 0 6px"><b>每日预算</b> <span class="muted">按上游 host 限额：USD/日（按量计费，如 Reverix）、请求数/日（包月订阅，如火山/WorkBuddy）；留空=不限，超限自动跳过该上游走兜底</span></div>';
+  for(const [host,b] of Object.entries(bgs)){
+    h += `<div class="rc-budget" data-host="${esc(host)}" style="display:flex;gap:6px;align-items:center;margin:3px 0;font-size:12px;flex-wrap:wrap"><code>${esc(host)}</code><label class="muted">USD/日</label><input class="rc-busd" type="number" min="0" step="0.5" value="${b.usd??''}" placeholder="不限" style="width:76px"><label class="muted">请求/日</label><input class="rc-breq" type="number" min="0" value="${b.requests??''}" placeholder="不限" style="width:76px"><button class="ghost" onclick="rcDelBudget('${esc(host)}')">删除</button></div>`;
+  }
+  h += '<div style="display:flex;gap:6px;margin:4px 0;flex-wrap:wrap;font-size:12px"><input id="rcBHost" placeholder="上游 host，如 reverix.ai" style="width:190px"><input id="rcBUsd" type="number" min="0" step="0.5" placeholder="USD/日" style="width:84px"><input id="rcBReq" type="number" min="0" placeholder="请求数/日" style="width:96px"><button class="ghost" onclick="rcAddBudget()">＋ 添加预算</button></div>';
   h += '<div style="margin:10px 0 6px"><b>路由</b> <span class="muted">每条路由 = 主模型 + 备选链；备选格式：model 或 model | baseUrl | apiKey（每行一个）</span></div>';
   for(const [name,r] of Object.entries(cfg.routes||{})){
     const curProv = r.provider && provs[r.provider] ? r.provider : '';
@@ -897,6 +969,22 @@ function rcDelProvider(n){
   if(!confirm('删除厂商 '+n+'？引用它的路由需改为直接填写')) return;
   delete routerCfgData.providers[n];
   for(const r of Object.values(routerCfgData.routes||{})) if(r.provider===n) delete r.provider;
+  renderRouterCfg();
+}
+function rcAddBudget(){
+  const host = ($('#rcBHost').value||'').trim();
+  if(!host){ toast('请填写上游 host', true); return; }
+  const b = {};
+  const usd = parseFloat($('#rcBUsd').value), req = parseInt($('#rcBReq').value, 10);
+  if(!isNaN(usd) && usd > 0) b.usd = usd;
+  if(!isNaN(req) && req > 0) b.requests = req;
+  if(!Object.keys(b).length){ toast('请至少填写一个限额', true); return; }
+  routerCfgData.budgets = routerCfgData.budgets || {};
+  routerCfgData.budgets[host] = b;
+  renderRouterCfg();
+}
+function rcDelBudget(host){
+  if(routerCfgData.budgets) delete routerCfgData.budgets[host];
   renderRouterCfg();
 }
 function rcAddRoute(){
@@ -932,6 +1020,15 @@ async function rcSaveConfig(){
   });
   if(!Object.keys(routes).length){alert('至少保留一条路由');return;}
   cfg.routes = routes;
+  const budgets = {};
+  document.querySelectorAll('#routerCfg .rc-budget').forEach(el=>{
+    const host = el.dataset.host; const b = {};
+    const usd = parseFloat(el.querySelector('.rc-busd').value), req = parseInt(el.querySelector('.rc-breq').value, 10);
+    if(!isNaN(usd) && usd > 0) b.usd = usd;
+    if(!isNaN(req) && req > 0) b.requests = req;
+    if(Object.keys(b).length) budgets[host] = b;
+  });
+  cfg.budgets = budgets;
   const mode = $('#rcClfMode').value;
   if(mode==='cloud') cfg.classifier = {mode:'cloud', route:$('#rcClfRoute').value, model:$('#rcClfModel').value.trim()};
   else cfg.classifier = {mode:'local', model:($('#rcClfLocalCustom').value.trim() || $('#rcClfLocalModel').value || '')};

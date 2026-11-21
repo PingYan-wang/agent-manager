@@ -910,6 +910,119 @@ const routerMgmtRoutes = [
   }],
 ];
 
+// ---------- Skill 市场：必备 + 按使用习惯推荐 ----------
+const SH_CACHE = new Map(); // `${q}|${limit}` -> { at, skills }
+const SH_TTL = 10 * 60 * 1000;
+const normSkillKey = (s) => String(s || '').toLowerCase().replace(/[^a-z0-9一-鿿]+/g, '');
+
+async function shSearch(q, limit = 5) {
+  const key = `${q}|${limit}`;
+  const hit = SH_CACHE.get(key);
+  if (hit && Date.now() - hit.at < SH_TTL) return hit.skills;
+  try {
+    const r = await fetch(`${SKILLS_SH}?q=${encodeURIComponent(q)}&limit=${limit}`, { signal: AbortSignal.timeout(15000) });
+    const data = await r.json();
+    const skills = (data.skills || []).map((s) => ({
+      name: s.name || s.skillId,
+      skillId: s.skillId,
+      source: s.source || '',
+      installs: s.installs ?? null,
+      installCommand: `asm install github:${s.source}:skills/${s.skillId}`,
+    }));
+    SH_CACHE.set(key, { at: Date.now(), skills });
+    return skills;
+  } catch { return []; }
+}
+
+// 必备位：通用基础能力，固定查询各取热度最高者
+const ESSENTIAL_QUERIES = [
+  { q: 'code review', label: '代码评审' },
+  { q: 'git commit', label: 'Git 提交规范' },
+  { q: 'xlsx', label: 'Excel 表格处理' },
+  { q: 'skill creator', label: '自制 Skill' },
+  { q: 'agent browser', label: '浏览器自动化' },
+  { q: 'webapp testing', label: '前端自动化测试' },
+];
+
+// 习惯信号（已装 skill 名 / 网关服务名 / 应用）→ 更贴切的社区查询词
+const HABIT_QUERIES = [
+  [/lark|feishu/i, 'lark doc', '你在用飞书/Lark'],
+  [/obsidian/i, 'obsidian cli', '你在用 Obsidian'],
+  [/ima/i, 'note taking', '你在用 ima 笔记'],
+  [/excel|xlsx|sheet/i, 'xlsx', '你在用 Excel'],
+  [/pdf|docx|document|office|pptx|presentation/i, 'docx', '你在处理 Office 文档'],
+  [/mail|email|qq/i, 'email', '你在用邮箱'],
+  [/light|cloud|server|devops|ops/i, 'devops', '你在管理云资源'],
+  [/node|code|dev|program|git/i, 'tdd', '你在做软件开发'],
+  [/blender|3d|design|frontend|ui/i, 'frontend design', '你在做设计/前端'],
+];
+
+async function collectInstalledSkillNames() {
+  const names = new Set();
+  try {
+    const agents = await scanAgents();
+    for (const a of agents) for (const s of a.skills || []) names.add(s.name);
+  } catch { /* 扫描失败不阻塞市场 */ }
+  const r = await asmRun(['list', '--json', '-s', 'both']);
+  const list = tryJson(r.stdout);
+  if (Array.isArray(list)) for (const s of list) names.add(s.name);
+  return names;
+}
+
+async function skillMarket() {
+  const installedNames = await collectInstalledSkillNames();
+  const isInstalled = (s) => installedNames.has(s.name) || installedNames.has(s.skillId)
+    || [...installedNames].some((n) => normSkillKey(n) === normSkillKey(s.name) || normSkillKey(n) === normSkillKey(s.skillId));
+
+  // ---- 必备 ----
+  const essentialHits = await Promise.all(ESSENTIAL_QUERIES.map(async (e) => ({ e, hits: await shSearch(e.q, 3) })));
+  const essential = essentialHits.filter((x) => x.hits[0])
+    .map((x) => ({ ...x.hits[0], reason: x.e.label, _score: Math.log10((x.hits[0].installs || 0) + 1) }));
+  essential.sort((a, b) => b._score - a._score);
+
+  // ---- 推荐：已装 skill + 网关服务名直接作为查询词，再叠加习惯映射 ----
+  const queries = []; // {q, reason}
+  const seenQ = new Set();
+  const pushQ = (q, reason) => {
+    const k = normSkillKey(q);
+    if (k && !seenQ.has(k) && queries.length < 14) { seenQ.add(k); queries.push({ q, reason }); }
+  };
+  const agents = await scanAgents().catch(() => []);
+  for (const a of agents) for (const s of (a.skills || []).slice(0, 40)) pushQ(s.name, `你已在用「${s.name}」`);
+  let gwNames = [];
+  try {
+    const g = await hubFetch('GET', '/servers');
+    const arr = Array.isArray(g.data) ? g.data : (g.data?.data || g.data?.servers || []);
+    gwNames = arr.map((s) => s.name).filter(Boolean);
+  } catch { /* 网关不可用时只按 skill 推荐 */ }
+  for (const n of gwNames) {
+    const clean = String(n).replace(/^workbuddy[-_]/i, '').replace(/[-_]+/g, ' ').trim();
+    pushQ(clean, `网关已接入「${n}」`);
+  }
+  const hay = [...installedNames, ...gwNames].join(' ');
+  for (const [re, q, reason] of HABIT_QUERIES) if (re.test(hay)) pushQ(q, reason);
+
+  const fetched = await Promise.all(queries.map(async ({ q, reason }) =>
+    (await shSearch(q, 4)).map((s) => ({ ...s, reason, _score: Math.log10((s.installs || 0) + 1) }))));
+  const recMap = new Map();
+  for (const arr of fetched) for (const s of arr) {
+    const key = `${s.source}/${s.skillId}`;
+    const cur = recMap.get(key);
+    if (!cur) recMap.set(key, { ...s, reasons: [s.reason] });
+    else { cur.reasons.push(s.reason); if (s._score > cur._score) { cur._score = s._score; Object.assign(cur, s, { reasons: cur.reasons }); } }
+  }
+  const essentialKeys = new Set(essential.map((s) => `${s.source}/${s.skillId}`));
+  const recommended = [...recMap.values()]
+    .filter((s) => !essentialKeys.has(`${s.source}/${s.skillId}`))
+    .filter((s) => !isInstalled(s))
+    .sort((a, b) => b._score - a._score)
+    .slice(0, 10)
+    .map((s) => ({ ...s, reason: s.reasons.join('、') }));
+
+  const pub = (s) => ({ name: s.name, skillId: s.skillId, source: s.source, installs: s.installs, installCommand: s.installCommand, reason: s.reason, installed: isInstalled(s) });
+  return { essential: essential.map(pub), recommended: recommended.map(pub), signals: { skills: installedNames.size, servers: gwNames.length } };
+}
+
 const routes = [...routerMgmtRoutes,
   // ---- 本地服务代理（/px/<id>/ → target） ----
   ['GET', /^\/api\/proxy\/list$/, async (req, res) => {
@@ -945,7 +1058,7 @@ const routes = [...routerMgmtRoutes,
     const p = String(prefix).trim();
     if (!p.startsWith('/px/')) return json(res, 400, { error: '前缀必须以 /px/ 开头' });
     const tgt = String(target).trim().replace(/\/$/, '');
-    const entryId = id || String(name).toLowerCase().replace(/[^\w-]/g, '-');
+    const entryId = id || `${String(name).toLowerCase().replace(/[^\w-]/g, '-').replace(/^-+|-+$/g, '') || 'svc'}-${Date.now().toString(36)}`;
     const ex = proxyEntries.find((e) => e.id === entryId || e.prefix === p);
     if (m[1] === 'add' && ex) return json(res, 400, { error: `已存在: ${ex.id}` });
     const fields = { name: String(name).trim(), prefix: p, target: tgt, llmRouter: !!llmRouter, note: note || '', enabled: enabled !== false };
@@ -1255,6 +1368,10 @@ const routes = [...routerMgmtRoutes,
     const data = tryJson(r.stdout);
     if (Array.isArray(data)) return json(res, 200, { results: data });
     json(res, 200, { results: [], raw: r.stdout.slice(0, 2000), stderr: r.stderr.slice(0, 500) });
+  }],
+  ['GET', /^\/api\/skills\/market$/, async (req, res) => {
+    try { json(res, 200, await skillMarket()); }
+    catch (e) { json(res, 500, { error: String(e), essential: [], recommended: [] }); }
   }],
   ['GET', /^\/api\/skills\/search-sh$/, async (req, res, body, m, url) => {
     const q = url.searchParams.get('q') || '';
