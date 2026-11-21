@@ -205,6 +205,16 @@ npm run test:router
 
 用本地假上游覆盖：厂商级跳过整家、模型级换模型、参数自愈、请求级快速失败、重试升档、全熔断快速失败、能力死局 400、已知故障快速失败、`strategy=cost` 排序、`tiers` 跟随配置。
 
+## 可选上游：Devin CLI 反代（devin-proxy）
+
+`devin-proxy/proxy.mjs` 把 Devin 桌面端内嵌 CLI 的无头模式（`devin -p --model ...`）包装成 OpenAI 兼容接口，把 Devin 账户可用的 Opus / GPT / Gemini 等前沿模型接入路由，作为 Reverix 的兜底厂商。
+
+- 启动：`DEVIN_PROXY_KEY=<随机key> node devin-proxy/proxy.mjs`（仅绑 127.0.0.1:8790，Bearer 鉴权；launchd 托管见下）
+- 模型映射：`DEVIN_MODEL_MAP='{"devin-opus":"<devin models 里的 ID>","devin-gpt":"...","devin-gemini":"..."}'`，具体 ID 以 `devin models` 输出为准；缺省原样透传
+- 能力声明：`tools:false, stream:false`——CLI 是完整 agent 会话，不接受 OpenAI 工具 schema、不支持 SSE，只适合纯聊天兜底
+- 成本与延迟：每次调用都是一个 Devin agent 会话（消耗 ACU、分钟级），仅作兜底；并发默认 2（`DEVIN_PROXY_CONCURRENCY`）
+- 路由配置：`providers` 加 `devin`（见 config.example.json），在 coding / complex / expert 链路 reverix 之后插入 `{ "provider": "devin", "models": ["devin-opus","devin-gpt","devin-gemini"] }`
+
 ## 开源方案对照
 
 写这套路由器前后对照过的主流项目，以及本项目的取舍：

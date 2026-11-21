@@ -17,6 +17,18 @@
       "label": "Reverix",
       "cost": 15
     },
+    "devin": {
+      "baseUrl": "http://127.0.0.1:8790/v1",
+      "apiKey": "devin-local-key",
+      "label": "Devin CLI 反代",
+      "cost": 0,
+      "capabilities": {
+        "tools": false,
+        "stream": false,
+        "maxChars": 64000,
+        "maxMessages": 100
+      }
+    },
     "local": {
       "baseUrl": "http://127.0.0.1:11434/v1",
       "apiKey": "ollama",
@@ -41,13 +53,15 @@
       "strategy": "priority",
       "chain": [
         { "provider": "volc", "models": ["kimi-k3.1-pro", "doubao-seed-2.1-pro"] },
-        { "provider": "reverix", "models": ["claude-opus-5-5", "gpt-6.1-sol"] }
+        { "provider": "reverix", "models": ["claude-opus-5-5", "gpt-6.1-sol"] },
+        { "provider": "devin", "models": ["devin-opus", "devin-gpt", "devin-gemini"] }
       ]
     },
     "complex": {
       "strategy": "latency",
       "chain": [
         { "provider": "reverix", "models": ["claude-opus-5-5", "gpt-6.1-sol"] },
+        { "provider": "devin", "models": ["devin-opus", "devin-gpt", "devin-gemini"] },
         { "provider": "volc", "models": ["glm-5.3"] }
       ]
     },
@@ -55,6 +69,7 @@
       "strategy": "priority",
       "chain": [
         { "provider": "reverix", "models": ["claude-fable-5-2", "claude-opus-5-5"] },
+        { "provider": "devin", "models": ["devin-opus", "devin-gpt", "devin-gemini"] },
         { "provider": "volc", "models": ["glm-5.3"] }
       ]
     }
