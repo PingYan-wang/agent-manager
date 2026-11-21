@@ -88,6 +88,9 @@
   button.btn:hover{background:var(--accent)}
   button.btn:active{transform:translateY(1px)}
   button.btn:disabled{opacity:.45;cursor:default}
+  button.btn.busy{opacity:.7;cursor:wait}
+  button.btn.done{background:var(--ok);opacity:1;cursor:default}
+  button.btn.fail{background:var(--danger);opacity:1;cursor:pointer}
   button.ghost{
     background:transparent;border:1px solid var(--line-strong);color:var(--muted);
     padding:6px 12px;border-radius:var(--r-sm);cursor:pointer;font-size:12px;
@@ -117,7 +120,7 @@
   .badge.on{color:var(--ok);border-color:rgba(62,124,79,.4)}
   .badge.off{color:var(--muted)}
   .badge.warn{color:var(--warn);border-color:rgba(168,116,26,.4)}
-  .desc{color:var(--muted);font-size:11.5px;max-width:540px;word-break:break-all;line-height:1.55}
+  .desc{color:var(--muted);font-size:11.5px;max-width:520px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
   .empty{text-align:center;color:var(--muted);padding:44px 0;font-size:12px;letter-spacing:.04em}
   .muted{color:var(--muted);font-size:11.5px}
   code,.mono{font-family:var(--mono)}
@@ -304,6 +307,49 @@
   .switch input:checked+.sl{background:var(--accent)}
   .switch input:checked+.sl:before{transform:translateX(15px)}
   .switch input:focus-visible+.sl{outline:2px solid var(--accent);outline-offset:2px}
+  /* 路由配置：子标签 + 卡片化行 */
+  .rc-route{border:1px solid var(--line);border-radius:var(--r);padding:12px 14px;margin:10px 0;background:var(--surface)}
+  .rc-r-head{display:flex;align-items:center;gap:10px;margin-bottom:10px}
+  .rc-r-name{font-family:var(--mono);font-size:13px;font-weight:600;color:var(--ink)}
+  .rc-r-head .rc-provsel{margin-left:auto;font-size:12px}
+  .rc-r-grid{display:grid;grid-template-columns:1.1fr 1.5fr 1.2fr;gap:8px}
+  .rc-r-grid label,.rcf-fb{display:flex;flex-direction:column;gap:4px;font-size:11px;color:var(--muted)}
+  .rc-r-grid input{width:100%;min-width:0}
+  .rcf-fb{margin-top:10px}
+  .rcf-fb textarea{width:100%;font-family:var(--mono);font-size:11.5px}
+  .rc-addrow{display:flex;gap:8px;margin-top:12px;flex-wrap:wrap;align-items:center}
+  .rc-addrow input{flex:0 1 220px;min-width:140px}
+  .rc-prow{display:flex;gap:10px;align-items:center;padding:8px 0;border-bottom:1px dashed var(--line);font-size:12.5px;flex-wrap:wrap}
+  .rc-prow:last-of-type{border-bottom:none}
+  .rc-prow .rc-pname{font-family:var(--mono);font-weight:600;min-width:110px}
+  .rc-prow .rc-purl{flex:1;min-width:180px;color:var(--muted);word-break:break-all}
+  .rc-brow{display:flex;gap:10px;align-items:center;padding:6px 0;border-bottom:1px dashed var(--line);font-size:12.5px;flex-wrap:wrap}
+  .rc-brow:last-of-type{border-bottom:none}
+  .rc-brow code{min-width:170px}
+  .rc-brow input{width:86px}
+  .rc-empty-note{padding:14px 0;color:var(--muted);font-size:12px}
+  /* Claude Code 风格状态行（编排页底部） */
+  .orch-statusline{display:flex;gap:14px;align-items:center;padding:6px 16px;border-top:1px solid var(--line);font-family:var(--mono);font-size:11px;flex:none;flex-wrap:wrap;min-height:26px}
+  .orch-statusline b{color:var(--ink);font-weight:600}
+  /* ⌘K 命令面板 */
+  .cmdk-mask{position:fixed;inset:0;background:rgba(30,26,20,.28);backdrop-filter:blur(2px);opacity:0;pointer-events:none;transition:opacity .15s;z-index:90}
+  .cmdk-mask.show{opacity:1;pointer-events:auto}
+  .cmdk{position:fixed;top:12vh;left:50%;transform:translateX(-50%) translateY(-8px);width:min(560px,92vw);background:var(--bg);border:1px solid var(--line-strong);border-radius:12px;box-shadow:0 18px 50px rgba(30,26,20,.28);z-index:91;opacity:0;pointer-events:none;transition:opacity .15s,transform .15s var(--ease);overflow:hidden}
+  .cmdk.show{opacity:1;pointer-events:auto;transform:translateX(-50%) translateY(0)}
+  .cmdk-input{display:flex;align-items:center;gap:8px;padding:11px 14px;border-bottom:1px solid var(--line)}
+  .cmdk-input>span{font-family:var(--mono);font-size:10px;color:var(--faint);border:1px solid var(--line);border-radius:4px;padding:1px 5px}
+  .cmdk-input input{flex:1;border:none;background:none;outline:none;font-size:13.5px;color:var(--ink);min-width:0}
+  .cmdk-list{max-height:46vh;overflow-y:auto;padding:6px}
+  .cmdk-item{display:flex;align-items:center;gap:10px;padding:8px 10px;border-radius:8px;cursor:pointer;font-size:13px;color:var(--ink)}
+  .cmdk-item.sel{background:var(--accent-soft)}
+  .cmdk-item .ci-ic{width:16px;text-align:center;flex:none;color:var(--muted)}
+  .cmdk-item.sel .ci-ic{color:var(--accent)}
+  .cmdk-item .ci-t{flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+  .cmdk-item .ci-h{font-size:11px;color:var(--faint);flex:none}
+  .cmdk-empty{padding:18px;text-align:center;color:var(--muted);font-size:12.5px}
+  @keyframes pulse{0%,100%{opacity:1}50%{opacity:.3}}
+  .oi-dot.running{animation:pulse 1.2s ease-in-out infinite}
+  #cmdkBtn{margin-left:12px;font-family:var(--mono);font-size:11px}
 </style>
 <script src="/lib/deep-chat.js" defer></script>
 </head>
@@ -314,11 +360,12 @@
   <nav>
     <button data-tab="agents" class="active"><img class="nav-ic" src="/icons/agents.png" alt="">Agent 体检</button>
     <button data-tab="mcp"><img class="nav-ic" src="/icons/mcp.png" alt="">MCP 服务</button>
-    <button data-tab="skills"><img class="nav-ic" src="/icons/skills.png" alt="">已安装 Skills</button>
+    <button data-tab="skills"><img class="nav-ic" src="/icons/skills.png" alt="">Skills</button>
     <button data-tab="orch"><img class="nav-ic" src="/icons/orch.png" alt="">任务编排</button>
     <button data-tab="router"><img class="nav-ic" src="/icons/router.png" alt="">自动路由</button>
     <button data-tab="proxy"><img class="nav-ic" src="/icons/proxy.png" alt="">反代</button>
   </nav>
+  <button class="ghost" id="cmdkBtn" onclick="cmdkToggle()" title="命令面板 (⌘K)">⌘K</button>
 </header>
 <main>
   <section id="tab-agents">
@@ -443,6 +490,7 @@ Dashboard:  http://localhost:3000  (账号见 MCPHub Dashboard)
             </div>
             <div class="orch-composer-hint muted">任务自动拆解→派发子 Agent→验收→(可选)自动续步优化 · 「自动」跟随编排设置中的执行 Client</div>
           </div>
+          <div class="orch-statusline muted" id="orchStatusLine"></div>
         </main>
       </div>
     </div>
@@ -451,26 +499,6 @@ Dashboard:  http://localhost:3000  (账号见 MCPHub Dashboard)
   </section>
 
   <section id="tab-router" style="display:none">
-    <div class="card">
-      <div class="toolbar"><h3>自动路由</h3><span class="muted" id="routerMeta" style="margin-left:auto"></span></div>
-      <div id="routerStatus"><div class="empty">加载中…</div></div>
-    </div>
-    <div class="card">
-      <div class="toolbar"><h3>路由策略</h3><span class="muted" style="margin-left:auto">auto 按任务自动分类；也可在 Hermes 中手动选 simple / coding / complex / expert</span></div>
-      <div id="routerRoutes"><div class="empty">加载中…</div></div>
-    </div>
-    <div class="card">
-      <div class="toolbar"><h3>路由配置</h3><span class="muted" style="margin-left:auto">自定义厂商与路由；保存后路由器自动热重载，API Key 留空表示不修改</span></div>
-      <div id="routerCfg"><div class="empty">加载中…</div></div>
-    </div>
-    <div class="card">
-      <div class="toolbar"><h3>分类器（分流小模型）</h3><span class="muted" style="margin-left:auto">默认云端；本地模式可一键下载 Ollama 模型</span></div>
-      <div id="routerClassifier"><div class="empty">加载中…</div></div>
-    </div>
-    <div class="card">
-      <div class="toolbar"><h3>Agent 接入自动路由</h3><span class="muted" style="margin-left:auto">一键把 Agent 的 LLM 指向自动路由</span></div>
-      <div id="routerAgents"><div class="empty">加载中…</div></div>
-    </div>
     <div class="card">
       <div class="toolbar"><h3>今日用量</h3><span style="margin-left:auto;display:flex;gap:6px;align-items:center"><button class="ghost" onclick="rcUsageView('route')">路线</button><button class="ghost" onclick="rcUsageView('provider')">服务商</button><button class="ghost" onclick="loadRouter()">↻ 刷新</button></span></div>
       <div id="routerStats"><div class="empty">加载中…</div></div>
@@ -490,6 +518,31 @@ Dashboard:  http://localhost:3000  (账号见 MCPHub Dashboard)
     <div class="card">
       <div class="toolbar"><h3>巡检日报</h3><span class="muted" style="margin-left:auto">每天 21:00 由本地看门狗生成</span></div>
       <div id="routerDigests"><div class="empty">加载中…</div></div>
+    </div>
+    <div class="card">
+      <div class="toolbar"><h3>自动路由</h3><span class="muted" id="routerMeta" style="margin-left:auto"></span></div>
+      <div id="routerStatus"><div class="empty">加载中…</div></div>
+    </div>
+    <div class="card">
+      <div class="toolbar"><h3>路由策略</h3><span class="muted" style="margin-left:auto">auto 按任务自动分类；也可在 Hermes 中手动选 simple / coding / complex / expert</span></div>
+      <div id="routerRoutes"><div class="empty">加载中…</div></div>
+    </div>
+    <div class="card">
+      <div class="toolbar"><h3>路由配置</h3><span class="muted" style="margin-left:auto">自定义厂商与路由；保存后路由器自动热重载，API Key 留空表示不修改</span><button onclick="rcSaveConfig()">保存配置</button></div>
+      <div class="subtabs">
+        <button class="subtab active" data-rcview="routes">路由</button>
+        <button class="subtab" data-rcview="providers">厂商</button>
+        <button class="subtab" data-rcview="budgets">预算</button>
+      </div>
+      <div id="routerCfg"><div class="empty">加载中…</div></div>
+    </div>
+    <div class="card">
+      <div class="toolbar"><h3>分类器（分流小模型）</h3><span class="muted" style="margin-left:auto">默认云端；本地模式可一键下载 Ollama 模型</span></div>
+      <div id="routerClassifier"><div class="empty">加载中…</div></div>
+    </div>
+    <div class="card">
+      <div class="toolbar"><h3>Agent 接入自动路由</h3><span class="muted" style="margin-left:auto">一键把 Agent 的 LLM 指向自动路由</span></div>
+      <div id="routerAgents"><div class="empty">加载中…</div></div>
     </div>
   </section>
 
@@ -567,6 +620,8 @@ document.addEventListener('click', e => {
   if(sm){ setSub('mcp', sm.dataset.mcpview); return; }
   const ss = e.target.closest('.subtab[data-skview]');
   if(ss){ setSub('skills', ss.dataset.skview); return; }
+  const sr = e.target.closest('.subtab[data-rcview]');
+  if(sr){ rcSub(sr.dataset.rcview); return; }
 });
 
 // ---------- Agent 体检 ----------
@@ -759,7 +814,7 @@ async function loadMcpMarket(q){
   if(!list.length){ $('#mcpMktList').innerHTML='<div class="empty">没有找到相关 MCP</div>'; return; }
   $('#mcpMktList').innerHTML = '<table><tbody><tr><th>名称</th><th>描述</th><th>接入方式</th><th>环境变量</th><th>操作</th></tr>' + list.map((s,i)=>`
     <tr><td><div class="name">${esc(s.title)}</div><div class="muted mono">${esc(s.name)}${s.version?' · v'+esc(s.version):''}</div></td>
-    <td class="desc">${esc((s.description||'').slice(0,160))}</td>
+    <td><div class="desc" title="${esc(s.description||'')}">${esc((s.description||'').slice(0,160))}</div></td>
     <td><span class="badge">${esc(s.via)}</span></td>
     <td>${s.envRequired?.length?`<span class="badge warn">需 ${s.envRequired.length} 项密钥</span>`:'<span class="muted">—</span>'}</td>
     <td style="white-space:nowrap">
@@ -802,7 +857,7 @@ async function loadSkills(){
     <tr><td><div class="name">${esc(s.name)}</div>${s.disabled?'<span class="badge off">已禁用</span>':''}${s._count>1?`<span class="badge">×${s._count} 安装点</span>`:''}</td>
     <td class="mono">${esc(s.version||'—')}</td>
     <td><span class="badge">${esc(s.providerLabel||'')}</span><span class="badge">${esc(s.scope||'')}</span></td>
-    <td class="desc">${esc((s.description||'').slice(0,120))}</td>
+    <td><div class="desc" title="${esc(s.description||'')}">${esc((s.description||'').slice(0,160))}</div></td>
     <td style="white-space:nowrap">
       <button class="ghost" data-act="skill-inspect" data-name="${esc(s.name)}">详情</button>
       <button class="ghost" data-act="skill-toggle" data-name="${esc(s.name)}" data-disabled="${!!s.disabled}">${s.disabled?'启用':'禁用'}</button>
@@ -877,6 +932,23 @@ async function syncAll(){
 function agentSkillAction(path, agentName, link){ openInstallModal(path, link); }
 
 // ---------- 市场 ----------
+// 一键安装：asm global+all（github 断连走 tarball 直装）→ 服务端自动 syncAllSkills 铺到所有 Agent
+async function quickInstallSkill(source, btn){
+  if(btn){ btn.disabled=true; btn.textContent='安装中…'; btn.classList.remove('done','fail'); btn.classList.add('busy'); }
+  const r = await api('/api/skills/quick-install',{method:'POST',body:{source}});
+  if(r.code===0){
+    const n = ((r.synced&&r.synced.created)||[]).length;
+    toast(`已安装并同步到所有 Agent${r.via==='github-tarball'?'（tarball 直装）':''}${r.resolvedSource?'（已修正仓库路径）':''}${n?'（新建 '+n+' 个链接）':''}`);
+    if(btn){ btn.textContent='已同步 ✓'; btn.classList.remove('busy'); btn.classList.add('done'); }
+    localSkillsCache=null; loadSkills(); loadAgents();
+    if($('#skillSearch') && $('#skillSearch').value.trim()) searchSkills();
+    if($('#skillMktEss')) loadSkillMarket();
+  } else {
+    if(btn){ btn.disabled=false; btn.textContent='安装失败 · 重试'; btn.classList.remove('busy'); btn.classList.add('fail'); }
+    modal(`<h3>安装失败 · ${esc(source)}</h3><pre>${esc((((r.stderr||'')+(r.stdout||'')||r.error||'未知错误')+'\n'+(r.via&&r.via!=='asm'?'['+r.via+']':'')).slice(-3000))}</pre>
+      <div class="actions"><button class="ghost" onclick="closeModal()">关闭</button><button class="btn" onclick="closeModal();openInstallModal('${esc(source)}')">改用手动安装</button></div>`);
+  }
+}
 function renderSkillMktItems(el, items, showReason){
   if(!items || !items.length){ el.innerHTML='<div class="mkt-empty">暂无推荐</div>'; return; }
   el.innerHTML = items.map(s=>`
@@ -915,8 +987,8 @@ async function searchSkills(){
   if(!list.length){ $('#marketList').innerHTML='<div class="empty">没有找到相关 skill</div>'; return; }
   $('#marketList').innerHTML = '<table><tbody><tr><th>名称</th><th>来源</th><th>描述</th><th>状态</th><th>操作</th></tr>' + list.map(s=>`
     <tr><td><div class="name">${esc(s.name)}</div><div class="muted mono">${s.version?'v'+esc(s.version):''}${s.installs!=null?' · '+Number(s.installs).toLocaleString()+' installs':''}</div></td>
-    <td class="desc mono">${esc(s.repo||'')}</td>
-    <td class="desc">${esc((s.description||'').slice(0,140))}</td>
+    <td><div class="desc mono" title="${esc(s.repo||'')}">${esc(s.repo||'')}</div></td>
+    <td><div class="desc" title="${esc(s.description||'')}">${esc((s.description||'').slice(0,140))}</div></td>
     <td>${s.status==='installed'?'<span class="badge on">已安装</span>':'<span class="badge">可安装</span>'}</td>
     <td><button class="btn install-btn" data-source="${esc(s.installCommand||s.name)}">安装</button></td>
     </tr>`).join('')+'</tbody></table>';
@@ -964,16 +1036,22 @@ function initOrchChat(){
   dc.requestBodyLimits = {maxMessages: 0};
 }
 
+let orchTasksAll=[];
 async function loadOrch(){
-  const [cfgR, taskR, poolR] = await Promise.all([api('/api/orchestrator/config'), api('/api/orchestrator/tasks'), api('/api/orchestrator/agent-pool').catch(()=>null)]);
+  const [cfgR, taskR, poolR] = await Promise.all([
+    api('/api/orchestrator/config').catch(()=>({})),
+    api('/api/orchestrator/tasks').catch(()=>({tasks:[]})),
+    api('/api/orchestrator/agent-pool').catch(()=>null)]);
   orchCfg = cfgR.config || {}; orchAgents = cfgR.agents || []; orchPool = poolR?.agents || [];
   if($('#orchDrawer')?.classList.contains('show')) renderOrchConfig();
   const tasks = (taskR.tasks || []).slice().sort((a,b)=>(b.createdAt||0)-(a.createdAt||0));
+  orchTasksAll = tasks;
   renderOrchTop(tasks); renderOrchList(tasks); renderOrchComposer();
   initOrchChat();
   if(orchSelId && tasks.some(t=>t.id===orchSelId)) await renderOrchDetail(orchSelId, false);
   else if(tasks.length){ orchSelId = tasks[0].id; await renderOrchDetail(orchSelId, true); }
-  else { orchSelId = null; orchChatTask = null; const dc=$('#orchChatEl'); if(dc&&orchChatReady){ dc.history=[]; dc.refreshMessages(); } renderOrchTree(null); }
+  else { orchSelId = null; orchChatTask = null; const dc=$('#orchChatEl'); if(dc&&orchChatReady){ dc.history=[]; dc.refreshMessages(); } renderOrchTree(null);
+    const sl=$('#orchStatusLine'); if(sl) sl.innerHTML=`引擎 <b>${orchCfg?.enabled?'运行中':'已关闭'}</b> · tick ${orchCfg?.tickSeconds||15}s · 池 ${(orchPool||[]).length} 实例 · 模型 <b>${orchCfg?.planner?.model||'auto'}</b>`; }
   clearTimeout(orchTimer);
   if($('#tab-orch').style.display!=='none') orchTimer = setTimeout(loadOrch, 8000);
 }
@@ -993,9 +1071,10 @@ function renderOrchList(tasks){
   $('#orchList').innerHTML = tasks.map(t=>{
     const steps = t.plan||[];
     const done = steps.filter(s=>s.status==='done').length;
+    const act=['pending','planning','running','verifying'].includes(t.status);
     return `<button class="orch-item ${t.id===orchSelId?'sel':''}" data-act="orch-sel" data-id="${t.id}">
       <div class="oi-goal">${esc(t.goal)}</div>
-      <div class="oi-meta"><span class="oi-dot" style="background:${orchStColor(t.status)}"></span>${ORCH_ST_TXT[t.status]||t.status}${steps.length?` · ${done}/${steps.length}步`:''}${t.parentId?' · 续':''} · ${orchTime(t.createdAt)}</div>
+      <div class="oi-meta"><span class="oi-dot${act?' running':''}" style="background:${orchStColor(t.status)}"></span>${ORCH_ST_TXT[t.status]||t.status}${steps.length?` · ${done}/${steps.length}步`:''}${t.parentId?' · 续':''} · ${orchTime(t.createdAt)}</div>
     </button>`;
   }).join('');
 }
@@ -1021,6 +1100,7 @@ function renderOrchTree(t){
   if(dc) dc.style.display=(orchView==='tree'||orchView==='plan')?'none':'';
   if(!show) return;
   orchTreeTask=t;
+  if(orchView!=='tree') return;
   const nodes=(t&&Array.isArray(t.tree))?t.tree:[];
   if(!nodes.length){ box.innerHTML='<div class="empty">暂无执行树（任务创建后自动生成）</div>'; return; }
   const byId={}; nodes.forEach(n=>byId[n.id]=n);
@@ -1060,12 +1140,13 @@ function renderOrchPlan(t){
   orchTreeTask=t;
   const steps=(t&&Array.isArray(t.plan))?t.plan:[];
   if(!steps.length){ box.innerHTML='<div class="empty">暂无计划</div>'; return; }
+  const done=steps.filter(s=>s.status==='done').length;
   const maxDepth=(typeof orchCfg!=='undefined'&&orchCfg&&orchCfg.maxDepth)||2;
-  box.innerHTML='<div class="ot-title muted">执行计划 · '+steps.length+' 步 · 递归深度上限 '+maxDepth+'</div><div class="op-list">'+steps.map((s,i)=>`
+  box.innerHTML='<div class="ot-title muted">执行计划 · '+done+'/'+steps.length+' 完成 · 递归深度上限 '+maxDepth+'</div><div class="op-list">'+steps.map((s,i)=>`
     <div class="op-step" style="--i:${i}">
       <span class="op-id">${esc(s.id)}</span>
       <div class="op-main">
-        <div class="op-title">${esc(s.title||s.prompt||'')}</div>
+        <div class="op-title">${s.needsDebate?'⚔ ':''}${esc(s.title||s.prompt||'')}${(s.deps||[]).length?` <span class="muted" style="font-size:10px">← ${s.deps.map(esc).join(',')}</span>`:''}</div>
         ${s.result?`<div class="op-result">${esc(s.result.slice(0,300))}</div>`:''}
       </div>
       ${s.agent?`<span class="ot-agent">${esc(s.agent)}</span>`:''}
@@ -1104,6 +1185,14 @@ function renderOrchTaskBar(t){
       <button class="ghost" data-act="orch-review-retry" data-id="${t.id}">再返工</button>
       <button class="ghost danger" data-act="orch-review-abort" data-id="${t.id}">终止</button>
     </div>`:''}`;
+  updateOrchStatusLine(t, steps);
+}
+// Claude Code 风格状态行：模型 / 工作目录 / 步骤计数 / 已运行时长
+function updateOrchStatusLine(t, steps){
+  const sl=$('#orchStatusLine'); if(!sl) return;
+  const run=(steps||[]).filter(s=>s.status==='running').length, fail=(steps||[]).filter(s=>s.status==='failed').length;
+  const dur=['pending','planning','running','verifying'].includes(t.status)&&t.createdAt?` · 已运行 ${Math.max(1,Math.round((Date.now()-t.createdAt)/1000))}s`:'';
+  sl.innerHTML=`模型 <b>${esc((orchCfg&&orchCfg.planner&&orchCfg.planner.model)||'auto')}</b> · ${esc(t.workdir||'~/')} · 运行 ${run} · 失败 ${fail}${dur} · 更新 ${orchTime(t.updatedAt||t.createdAt)}`;
 }
 
 const STEP_ICON = {done:'✅',running:'🔵',failed:'❌',pending:'⚪',paused:'⏸'};
@@ -1239,15 +1328,71 @@ function renderOrchConfig(){
     <div class="orch-planner">提示：子 Agent 以本机 CLI 无头模式运行（hermes -z / codex exec / devin -p），工作目录默认为任务工作目录。</div>`;
 }
 
+// ---------- ⌘K 命令面板 ----------
+let cmdkOpen=false, cmdkIdx=0, cmdkFiltered=[];
+function goTab(id){ const b=document.querySelector(`nav button[data-tab="${id}"]`); if(b) b.click(); }
+function isTyping(){ const a=document.activeElement; return a&&(a.tagName==='INPUT'||a.tagName==='TEXTAREA'||a.tagName==='SELECT'||a.isContentEditable); }
+function cmdkCommands(){
+  const TABS=[['agents','Agent 体检'],['mcp','MCP 服务'],['skills','已安装 Skills'],['orch','任务编排'],['router','自动路由'],['proxy','反代']];
+  const cmds=TABS.map(([id,name],i)=>({t:`转到「${name}」`,hint:`⌘${i+1}`,icon:'◈',run:()=>goTab(id)}));
+  cmds.push(
+    {t:'新建编排任务',hint:'跳转并聚焦目标输入',icon:'＋',run:()=>{goTab('orch');setTimeout(()=>$('#orchGoal')?.focus(),80);}},
+    {t:'刷新当前页',hint:'重新拉取数据',icon:'↻',run:()=>{const b=document.querySelector('nav button.active');b&&b.click();}},
+    {t:'编排设置',hint:'开关 / 参数 / 子 Agent 池',icon:'⚙',run:()=>{goTab('orch');setTimeout(()=>{if(!$('#orchDrawer')?.classList.contains('show'))toggleOrchSettings();},80);}},
+    {t:'切换执行树视图',hint:'编排页 · 树/计划/对话',icon:'🌳',run:()=>{goTab('orch');orchView=orchView==='tree'?'chat':'tree';const id=orchChatTask||orchSelId;if(id)renderOrchDetail(id,false);}},
+  );
+  const cur=(orchTasksAll||[]).find(x=>x.id===orchSelId);
+  if(cur){
+    cmds.push({t:'当前任务: 暂停',hint:cur.id.slice(0,14),icon:'⏸',run:()=>orchAction(cur.id,'pause')});
+    if(['paused','blocked','failed'].includes(cur.status)) cmds.push({t:'当前任务: 继续',hint:cur.id.slice(0,14),icon:'▶',run:()=>orchAction(cur.id,'resume')});
+    if(!['done','failed'].includes(cur.status)) cmds.push({t:'当前任务: 停止',hint:cur.id.slice(0,14),icon:'■',run:()=>orchAction(cur.id,'stop')});
+  }
+  return cmds;
+}
+function cmdkToggle(){ cmdkOpen?cmdkClose():cmdkOpenPalette(); }
+function cmdkOpenPalette(){
+  cmdkOpen=true; cmdkIdx=0;
+  $('#cmdkMask').classList.add('show'); $('#cmdk').classList.add('show');
+  const inp=$('#cmdkInput'); inp.value=''; cmdkRender('');
+  setTimeout(()=>inp.focus(),30);
+}
+function cmdkClose(){ cmdkOpen=false; $('#cmdkMask').classList.remove('show'); $('#cmdk').classList.remove('show'); }
+function cmdkRender(q){
+  q=(q||'').trim().toLowerCase();
+  cmdkFiltered=cmdkCommands().filter(c=>!q||(c.t+' '+(c.hint||'')).toLowerCase().includes(q));
+  if(cmdkIdx>=cmdkFiltered.length) cmdkIdx=0;
+  $('#cmdkList').innerHTML=cmdkFiltered.length
+    ? cmdkFiltered.map((c,i)=>`<div class="cmdk-item ${i===cmdkIdx?'sel':''}" data-i="${i}"><span class="ci-ic">${c.icon||'›'}</span><span class="ci-t">${esc(c.t)}</span><span class="ci-h">${esc(c.hint||'')}</span></div>`).join('')
+    : '<div class="cmdk-empty">没有匹配的命令</div>';
+  const sel=$('#cmdkList .cmdk-item.sel'); if(sel) sel.scrollIntoView({block:'nearest'});
+}
+function cmdkRun(i){ const c=cmdkFiltered[i]; cmdkClose(); if(c) c.run(); }
+$('#cmdkInput').addEventListener('input',e=>{cmdkIdx=0;cmdkRender(e.target.value);});
+$('#cmdkInput').addEventListener('keydown',e=>{
+  if(e.key==='ArrowDown'){e.preventDefault();cmdkIdx=Math.min(cmdkIdx+1,cmdkFiltered.length-1);cmdkRender($('#cmdkInput').value);}
+  else if(e.key==='ArrowUp'){e.preventDefault();cmdkIdx=Math.max(cmdkIdx-1,0);cmdkRender($('#cmdkInput').value);}
+  else if(e.key==='Enter'){e.preventDefault();cmdkRun(cmdkIdx);}
+});
+document.addEventListener('keydown',e=>{
+  if((e.metaKey||e.ctrlKey)&&e.key.toLowerCase()==='k'){e.preventDefault();cmdkToggle();return;}
+  if(e.key==='Escape'&&cmdkOpen){cmdkClose();return;}
+  if((e.metaKey||e.ctrlKey)&&/^[1-6]$/.test(e.key)&&!isTyping()){
+    e.preventDefault();
+    goTab(['agents','mcp','skills','orch','router','proxy'][+e.key-1]);
+  }
+});
+
 // ---------- 事件委托 ----------
 document.addEventListener('click', e => {
+  const ci = e.target.closest('.cmdk-item');
+  if(ci){ cmdkRun(+ci.dataset.i); return; }
   const foldEl = e.target.closest('.fold-head');
   if(foldEl){ foldEl.parentElement.classList.toggle('open'); return; }
   const el = e.target.closest('[data-act],.install-btn');
   if(!el) return;
   const act = el.dataset.act || 'market-install';
   const d = el.dataset;
-  if(act==='market-install'){ openInstallModal(d.source); return; }
+  if(act==='market-install'){ quickInstallSkill(d.source, el); return; }
   if(act==='import-mcp'){ api('/api/agents/import-mcp',{method:'POST',body:{agentId:d.agent,serverName:d.name}}).then(r=>{ toast(r.success===false?'导入失败: '+(r.message||''):'已导入 '+d.name+' → MCPHub', r.success===false); loadServers(); }); return; }
   if(act==='agent-repair'){ agentRepair(d.agent, d.what); return; }
   if(act==='link-skill'){ agentSkillAction(d.path, d.agent, true); return; }
@@ -1289,43 +1434,59 @@ function rcProvSelects(){
   const provs = Object.keys((routerCfgData&&routerCfgData.providers)||{});
   return ['', ...provs].map(p=>`<option value="${esc(p)}">${p?esc(p):'直接填写'}</option>`).join('');
 }
+let rcView='routes';
+function rcSub(v){
+  rcView=v;
+  document.querySelectorAll('.subtab[data-rcview]').forEach(b=>b.classList.toggle('active',b.dataset.rcview===v));
+  ['routes','providers','budgets'].forEach(k=>{ const el=$('#rcView-'+k); if(el) el.style.display=k===v?'':'none'; });
+}
 function renderRouterCfg(){
   const cfg = routerCfgData; if(!cfg) return;
   const provs = cfg.providers || {};
-  let h = '<div style="margin-bottom:6px"><b>厂商</b> <span class="muted">OpenAI 兼容接口；路由可引用厂商或直接填写地址</span></div>';
-  const provRows = Object.entries(provs).map(([n,p])=>`<div style="display:flex;gap:8px;align-items:center;margin:3px 0;font-size:12px"><code>${esc(n)}</code><span class="muted" style="word-break:break-all">${esc(p.baseUrl)}</span><button class="ghost" onclick="rcDelProvider('${esc(n)}')">删除</button></div>`).join('');
-  h += `<div>${provRows || '<span class="muted">暂无厂商，先添加一个</span>'}</div>
-  <div style="display:flex;gap:6px;margin:6px 0;flex-wrap:wrap">
-   <input id="rcProvName" placeholder="厂商名" style="width:110px">
-   <input id="rcProvUrl" placeholder="https://api.example.com/v1" style="width:250px">
-   <input id="rcProvKey" type="password" placeholder="API Key" style="width:170px">
-   <button class="ghost" onclick="rcAddProvider()">＋ 添加厂商</button></div>`;
-  const bgs = cfg.budgets || {};
-  h += '<div style="margin:10px 0 6px"><b>每日预算</b> <span class="muted">按上游 host 限额：USD/日（按量计费，如 Reverix）、请求数/日（包月订阅，如火山/WorkBuddy）；留空=不限，超限自动跳过该上游走兜底</span></div>';
-  for(const [host,b] of Object.entries(bgs)){
-    h += `<div class="rc-budget" data-host="${esc(host)}" style="display:flex;gap:6px;align-items:center;margin:3px 0;font-size:12px;flex-wrap:wrap"><code>${esc(host)}</code><label class="muted">USD/日</label><input class="rc-busd" type="number" min="0" step="0.5" value="${b.usd??''}" placeholder="不限" style="width:76px"><label class="muted">请求/日</label><input class="rc-breq" type="number" min="0" value="${b.requests??''}" placeholder="不限" style="width:76px"><button class="ghost" onclick="rcDelBudget('${esc(host)}')">删除</button></div>`;
-  }
-  h += '<div style="display:flex;gap:6px;margin:4px 0;flex-wrap:wrap;font-size:12px"><input id="rcBHost" placeholder="上游 host，如 reverix.ai" style="width:190px"><input id="rcBUsd" type="number" min="0" step="0.5" placeholder="USD/日" style="width:84px"><input id="rcBReq" type="number" min="0" placeholder="请求数/日" style="width:96px"><button class="ghost" onclick="rcAddBudget()">＋ 添加预算</button></div>';
-  h += '<div style="margin:10px 0 6px"><b>路由</b> <span class="muted">每条路由 = 主模型 + 备选链；备选格式：model 或 model | baseUrl | apiKey（每行一个）</span></div>';
+  // ---- 路由 ----
+  let routes = '';
   for(const [name,r] of Object.entries(cfg.routes||{})){
     const curProv = r.provider && provs[r.provider] ? r.provider : '';
     const fbLines = (r.fallbacks||[]).map(f=>{
       if(f.baseUrl && f.baseUrl!==r.baseUrl) return `${f.model} | ${f.baseUrl} | ${f.apiKey&&f.apiKey!=='***'?f.apiKey:''}`;
       return f.model;
     }).join('\n');
-    h += `<div class="rc-route" data-name="${esc(name)}" style="border:1px solid var(--line);border-radius:var(--r-sm);padding:8px;margin:8px 0">
-     <div style="display:flex;gap:8px;align-items:center;margin-bottom:6px;flex-wrap:wrap"><b>${esc(name)}</b>
-      <select class="rc-provsel" style="font-size:12px">${rcProvSelects().replace(`<option value="${curProv}">`, `<option value="${curProv}" selected>`)}
-      <button class="ghost" style="margin-left:auto" onclick="rcDelRoute('${esc(name)}')">删除路由</button></div>
-     <div style="display:flex;gap:6px;flex-wrap:wrap">
-      <input class="rc-model" value="${esc(r.model)}" placeholder="模型名" style="width:200px">
-      <input class="rc-url" value="${curProv?'':esc(r.baseUrl)}" placeholder="https://.../v1" style="width:270px">
-      <input class="rc-key" type="password" value="${r.apiKey==='***'?'':esc(r.apiKey||'')}" placeholder="${r.apiKey==='***'?'已配置(留空不变)':'API Key'}" style="width:160px"></div>
-     <textarea class="rc-fb" rows="2" placeholder="备选模型，每行一个" style="width:100%;margin-top:6px;font-size:12px">${esc(fbLines)}</textarea></div>`;
+    routes += `<div class="rc-route" data-name="${esc(name)}">
+     <div class="rc-r-head"><span class="rc-r-name">${esc(name)}</span>
+       <span class="muted" style="font-size:11px">主模型失败自动切备选</span>
+       <select class="rc-provsel">${rcProvSelects().replace(`<option value="${curProv}">`, `<option value="${curProv}" selected>`)}</select>
+       <button class="ghost danger" onclick="rcDelRoute('${esc(name)}')">删除</button></div>
+     <div class="rc-r-grid">
+      <label>模型<input class="rc-model" value="${esc(r.model)}" placeholder="模型名"></label>
+      <label>Base URL<input class="rc-url" value="${curProv?'':esc(r.baseUrl)}" placeholder="https://.../v1"></label>
+      <label>API Key<input class="rc-key" type="password" value="${r.apiKey==='***'?'':esc(r.apiKey||'')}" placeholder="${r.apiKey==='***'?'已配置·留空不变':'API Key'}"></label>
+     </div>
+     <label class="rcf-fb">备选链 · 每行一个：<code>model</code> 或 <code>model | baseUrl | apiKey</code>
+      <textarea class="rc-fb" rows="2" placeholder="glm-5.3-flash&#10;deepseek-v4.1-flash | https://... | key">${esc(fbLines)}</textarea></label></div>`;
   }
-  h += `<div style="margin-top:8px;display:flex;gap:8px;align-items:center;flex-wrap:wrap"><input id="rcNewRoute" placeholder="新路由名（如 fast / vision）" style="width:180px"><button class="ghost" onclick="rcAddRoute()">＋ 添加路由</button>
-   <button onclick="rcSaveConfig()" style="margin-left:auto">保存配置</button></div>`;
-  $('#routerCfg').innerHTML = h;
+  routes = `<div class="muted" style="font-size:11.5px;margin-bottom:4px">每条路由 = 接入来源 + 主模型 + 备选链；「接入」选厂商则自动带出地址与密钥</div>` +
+    (routes || '<div class="rc-empty-note">暂无路由</div>') +
+    `<div class="rc-addrow"><input id="rcNewRoute" placeholder="新路由名（如 fast / vision）"><button class="ghost" onclick="rcAddRoute()">＋ 添加路由</button></div>`;
+  // ---- 厂商 ----
+  const provRows = Object.entries(provs).map(([n,p])=>{
+    const refs = Object.values(cfg.routes||{}).filter(x=>x.provider===n).length;
+    return `<div class="rc-prow"><span class="rc-pname">${esc(n)}</span><span class="rc-purl">${esc(p.baseUrl)}</span><span class="muted">${p.apiKey?'key ✓':'无 key'}${refs?' · '+refs+' 条路由引用':''}</span><button class="ghost danger" onclick="rcDelProvider('${esc(n)}')">删除</button></div>`;
+  }).join('');
+  const providers = `<div class="muted" style="font-size:11.5px;margin-bottom:6px">OpenAI 兼容接口；路由可引用厂商或直接填写地址</div>` +
+    (provRows || '<div class="rc-empty-note">暂无厂商</div>') +
+    `<div class="rc-addrow"><input id="rcProvName" placeholder="厂商名"><input id="rcProvUrl" placeholder="https://api.example.com/v1" style="flex:1;min-width:200px"><input id="rcProvKey" type="password" placeholder="API Key"><button class="ghost" onclick="rcAddProvider()">＋ 添加厂商</button></div>`;
+  // ---- 预算 ----
+  const bgs = cfg.budgets || {};
+  let buds = `<div class="muted" style="font-size:11.5px;margin-bottom:6px">按上游 host 限额：USD/日（按量计费）或 请求数/日（包月订阅）；留空=不限，超限自动走兜底</div>`;
+  for(const [host,b] of Object.entries(bgs)){
+    buds += `<div class="rc-budget rc-brow" data-host="${esc(host)}"><code>${esc(host)}</code><label class="muted">USD/日</label><input class="rc-busd" type="number" min="0" step="0.5" value="${b.usd??''}" placeholder="不限"><label class="muted">请求/日</label><input class="rc-breq" type="number" min="0" value="${b.requests??''}" placeholder="不限"><button class="ghost danger" onclick="rcDelBudget('${esc(host)}')">删除</button></div>`;
+  }
+  buds += `<div class="rc-addrow"><input id="rcBHost" placeholder="上游 host，如 reverix.ai"><input id="rcBUsd" type="number" min="0" step="0.5" placeholder="USD/日"><input id="rcBReq" type="number" min="0" placeholder="请求数/日"><button class="ghost" onclick="rcAddBudget()">＋ 添加预算</button></div>`;
+  $('#routerCfg').innerHTML =
+    `<div id="rcView-routes">${routes}</div>` +
+    `<div id="rcView-providers" style="display:none">${providers}</div>` +
+    `<div id="rcView-budgets" style="display:none">${buds}</div>`;
+  rcSub(rcView);
 }
 function rcAddProvider(){
   const n=$('#rcProvName').value.trim(), u=$('#rcProvUrl').value.trim(), k=$('#rcProvKey').value.trim();
@@ -1509,16 +1670,21 @@ function rcToggleRoute(r){ rcUsageExpanded = (rcUsageExpanded===r?null:r); rende
 function rcUsageView(v){ rcUsageViewMode = v; renderUsageDetail(); }
 
 async function loadRouter(){
+  // 单个接口失败不再拖垮整页：降级为 {error} 由各渲染函数展示
+  const safe = p => p.catch(e=>({error:'请求失败: '+(e&&e.message||e)}));
   const [st, ss, bl, dg, tr, mu] = await Promise.all([
-    api('/api/router/status'), api('/api/router/stats'), api('/api/router/balance'), api('/api/router/digests'), api('/api/router/trend'), api('/api/router/model-usage')
+    safe(api('/api/router/status')), safe(api('/api/router/stats')), safe(api('/api/router/balance')),
+    safe(api('/api/router/digests')), safe(api('/api/router/trend')), safe(api('/api/router/model-usage'))
   ]);
   window.__rcUsage = mu;
-  renderRouterStatus(st);
-  renderRouterStats(ss);
-  renderRouterBalance(bl);
-  renderRouterDigests(dg);
-  renderRouterTrend(tr);
-  renderUsageDetail();
+  // 渲染函数异常时把对应区块标记为失败，而不是一直停在「加载中」
+  const R = (fn, arg, el) => { try{ fn(arg); }catch(e){ const t=$(el); if(t) t.innerHTML=`<div class="empty">渲染失败: ${esc(e.message)}</div>`; } };
+  R(renderRouterStatus, st, '#routerStatus');
+  R(renderRouterStats, ss, '#routerStats');
+  R(renderRouterBalance, bl, '#routerBalance');
+  R(renderRouterDigests, dg, '#routerDigests');
+  R(renderRouterTrend, tr, '#routerTrend');
+  try{ renderUsageDetail(); }catch(e){}
   loadRouterConfigUI();
   loadRouterAgents();
 }
@@ -1710,5 +1876,10 @@ function proxyQuickAdd(port, proc){
 hubHealth(); loadAgents();
 setInterval(hubHealth, 30000);
 </script>
+<div class="cmdk-mask" id="cmdkMask" onclick="cmdkClose()"></div>
+<div class="cmdk" id="cmdk">
+  <div class="cmdk-input"><span>⌘K</span><input id="cmdkInput" placeholder="搜索命令、页面、任务操作…" autocomplete="off"></div>
+  <div class="cmdk-list" id="cmdkList"></div>
+</div>
 </body>
 </html>
