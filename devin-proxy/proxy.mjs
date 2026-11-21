@@ -73,7 +73,7 @@ function release() {
 function runDevin(model, prompt) {
   return new Promise((resolve, reject) => {
     const devinModel = MODEL_MAP[model] || model;
-    const args = ['-p', '--permission-mode', 'auto'];
+    const args = ['-p', '--permission-mode', 'auto', '--respect-workspace-trust', 'false'];
     if (devinModel && devinModel !== 'default') args.push('--model', devinModel);
     args.push('--', prompt);
     const started = Date.now();
