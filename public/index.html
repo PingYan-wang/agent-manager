@@ -1748,9 +1748,15 @@ function renderRouterTrend(t){
 // ---------- 反向代理 ----------
 let proxyData = [];
 async function loadProxy(){
-  const r = await api('/api/proxy/list');
-  proxyData = (r && r.entries) || [];
-  renderProxy();
+  try {
+    const r = await api('/api/proxy/list');
+    proxyData = (r && r.entries) || [];
+  } catch(e) {
+    $('#proxyList').innerHTML = `<div class="empty">加载失败: ${esc(e.message||e)} <button class="ghost" onclick="loadProxy()">重试</button></div>`;
+    return;
+  }
+  try { renderProxy(); }
+  catch(e) { $('#proxyList').innerHTML = `<div class="empty">渲染失败: ${esc(e.message||e)}</div>`; return; }
   const router = proxyData.find(e => e.id === 'router');
   if (router) $('#proxyLlmUrl').textContent = router.llmUrl || '';
 }
