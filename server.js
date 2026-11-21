@@ -16,6 +16,7 @@ const HUB_URL = config.hubUrl;
 const HUB_KEY = config.hubKey;
 const ASM = config.asmBin;
 const SKILLS_SH = 'https://skills.sh/api/search';
+const MCP_REGISTRY = 'https://registry.modelcontextprotocol.io';
 
 const json = (res, code, obj) => {
   res.writeHead(code, { 'Content-Type': 'application/json; charset=utf-8' });
@@ -67,6 +68,20 @@ function asmRun(args, timeoutMs = 120000) {
     });
   });
 }
+
+function runCmd(bin, args, timeoutMs = 30000) {
+  return new Promise((resolve) => {
+    execFile(bin, args, { timeout: timeoutMs, maxBuffer: 4 * 1024 * 1024 }, (err, stdout, stderr) => {
+      resolve({
+        code: err ? (typeof err.code === 'number' ? err.code : 1) : 0,
+        stdout: stdout || '',
+        stderr: stderr || '',
+      });
+    });
+  });
+}
+
+let balanceCache = null;
 
 const tryJson = (text) => {
   try {
@@ -623,6 +638,68 @@ const routes = [
     json(res, 200, { results: await ensureAgentBootstrap(), entries: await bootstrapStatus() });
   }],
 
+  // ---- MCP 市场（官方 Registry） ----
+  ['GET', /^\/api\/mcp-market$/, async (req, res, body, m, url) => {
+    const q = (url.searchParams.get('q') || '').trim();
+    const limit = Math.min(Number(url.searchParams.get('limit')) || 50, 100);
+    try {
+      const u = new URL(`${MCP_REGISTRY}/v0.1/servers`);
+      u.searchParams.set('limit', String(limit));
+      if (q.length >= 3) u.searchParams.set('search', q); // 官方要求搜索词≥3字符
+      const r = await fetch(u, { signal: AbortSignal.timeout(20000) });
+      if (!r.ok) return json(res, 502, { error: `Registry HTTP ${r.status}`, results: [] });
+      const data = await r.json();
+      // 同名多版本去重，保留最新（_meta isLatest 优先，否则取版本号最大）
+      const byName = new Map();
+      const newer = (a, b) => String(a.version || '').localeCompare(String(b.version || ''), undefined, { numeric: true }) > 0;
+      for (const item of data.servers || []) {
+        const s = item.server || {};
+        if (!s.name) continue;
+        const cur = byName.get(s.name);
+        const isLatest = item._meta?.['io.modelcontextprotocol.registry/official']?.isLatest;
+        if (!cur || isLatest || (!cur._latest && newer(s, cur))) byName.set(s.name, { ...s, _latest: isLatest });
+      }
+      const results = [...byName.values()].map((s) => {
+        const remote = (s.remotes || []).find((r) => r.type === 'streamable-http') || (s.remotes || [])[0];
+        const pkg = (s.packages || [])[0];
+        const envRequired = (pkg?.environmentVariables || []).filter((e) => e.isRequired).map((e) => e.name);
+        return {
+          name: s.name, title: s.title || s.name, description: s.description || '',
+          version: s.version || '', homepage: s.websiteUrl || s.repository?.url || '',
+          installable: !!(remote?.url || pkg),
+          via: remote?.url ? 'remote' : pkg ? `${pkg.registryType || pkg.runtimeHint || 'stdio'}` : 'unknown',
+          envRequired,
+          _raw: { remotes: s.remotes || [], packages: (s.packages || []).slice(0, 2) },
+        };
+      });
+      json(res, 200, { results, total: results.length });
+    } catch (e) {
+      json(res, 502, { error: String(e), results: [] });
+    }
+  }],
+  ['POST', /^\/api\/mcp-market\/install$/, async (req, res, body) => {
+    const { raw, name } = body || {};
+    const remotes = raw?.remotes || [];
+    const packages = raw?.packages || [];
+    let config = null;
+    const remote = remotes.find((r) => r.type === 'streamable-http') || remotes.find((r) => /sse|http/i.test(r.type || ''));
+    if (remote?.url) {
+      config = { type: remote.type === 'sse' ? 'sse' : 'streamable-http', url: remote.url };
+    } else {
+      const pkg = packages.find((p) => ['npm', 'pypi'].includes(p.registryType)) || packages[0];
+      if (pkg) {
+        const hint = String(pkg.runtimeHint || (pkg.registryType === 'pypi' ? 'uvx' : 'npx')).toLowerCase();
+        const cmd = hint.includes('uvx') || hint.includes('pip') || hint === 'python' ? 'uvx' : 'npx';
+        const args = [...(pkg.runtimeArguments || []).map((a) => a.value), `${pkg.identifier || name}${pkg.version ? '@' + pkg.version : ''}`];
+        config = { type: 'stdio', command: cmd, args };
+      }
+    }
+    if (!config) return json(res, 400, { error: '该条目没有可安装的 remote/package 信息' });
+    const safeName = String(name || 'mcp-market').replace(/[^\w.-]/g, '_').slice(0, 60);
+    const r = await hubFetch('POST', '/servers', { name: safeName, config });
+    json(res, r.status, r.data);
+  }],
+
   // ---- Skills (asm) ----
   ['GET', /^\/api\/skills$/, async (req, res) => {
     const r = await asmRun(['list', '--json', '-s', 'both']);
@@ -706,6 +783,87 @@ const routes = [
     const r = await asmRun([m[1], String(name), '-y', '--json'], 120000);
     const data = tryJson(r.stdout);
     json(res, r.code === 0 ? 200 : 500, { code: r.code, result: data, stdout: r.stdout.slice(-4000), stderr: r.stderr.slice(-2000) });
+  }],
+  // ---- 自动路由（Hermes 本地模型路由器 ~/.hermes/router）----
+  ['GET', /^\/api\/router\/status$/, async (req, res) => {
+    const [router, ollama] = await Promise.all([
+      fetch('http://127.0.0.1:8788/healthz', { signal: AbortSignal.timeout(4000) }).then((r) => r.json()).catch(() => null),
+      fetch('http://127.0.0.1:11434/api/tags', { signal: AbortSignal.timeout(4000) }).then((r) => r.json()).catch(() => null),
+    ]);
+    let cfg = null;
+    try { cfg = JSON.parse(await readFile(path.join(HOME, '.hermes', 'router', 'config.json'), 'utf8')); } catch { /* 无配置 */ }
+    const routesView = {};
+    if (cfg && cfg.routes) {
+      for (const [name, r] of Object.entries(cfg.routes)) {
+        const chain = [r, ...(r.fallbacks || (r.fallback ? [r.fallback] : []))];
+        routesView[name] = {
+          model: r.model,
+          host: String(r.baseUrl || '').replace(/^https?:\/\//, '').split('/')[0],
+          fallbacks: chain.slice(1).map((f) => f.model),
+        };
+      }
+    }
+    json(res, 200, {
+      routerOk: !!(router && router.ok),
+      routerInfo: router || null,
+      ollamaOk: !!ollama,
+      classifier: cfg && cfg.classifierModel,
+      routes: routesView,
+    });
+  }],
+  ['GET', /^\/api\/router\/stats$/, async (req, res) => {
+    try {
+      const text = await readFile(path.join(HOME, '.hermes', 'router', 'router.log'), 'utf8').catch(() => '');
+      const lines = text.trim() ? text.trim().split('\n') : [];
+      const today = new Date().toISOString().slice(0, 10);
+      const counts = {};
+      let fails = 0, stick = 0, total = 0;
+      for (const l of lines) {
+        if (!l.includes(today)) continue;
+        total++;
+        const m = l.match(/route=(\w+)/);
+        if (m) counts[m[1]] = (counts[m[1]] || 0) + 1;
+        if (l.includes(' FAIL ')) fails++;
+        if (l.includes('stick=1')) stick++;
+      }
+      json(res, 200, { date: today, total, counts, fails, stick, tail: lines.slice(-20) });
+    } catch (e) { json(res, 500, { error: String(e) }); }
+  }],
+  ['GET', /^\/api\/router\/balance$/, async (req, res) => {
+    if (balanceCache && Date.now() - balanceCache.ts < 60000) return json(res, 200, balanceCache.data);
+    const r = await runCmd('/usr/bin/python3', [path.join(HOME, '.hermes', 'watchdog', 'balance_check.py')], 90000);
+    if (r.code === 0) {
+      const data = tryJson(r.stdout);
+      if (data) {
+        balanceCache = { ts: Date.now(), data };
+        return json(res, 200, data);
+      }
+    }
+    json(res, 200, { error: (r.stderr || r.stdout || 'balance check failed').slice(-300) });
+  }],
+  ['POST', /^\/api\/router\/restart$/, async (req, res) => {
+    const r = await runCmd('launchctl', ['kickstart', '-k', 'gui/501/ai.hermes.router'], 15000);
+    json(res, r.code === 0 ? 200 : 500, { ok: r.code === 0, stderr: r.stderr.slice(-200) });
+  }],
+  ['GET', /^\/api\/router\/digests$/, async (req, res) => {
+    const dir = path.join(HOME, '.hermes', 'watchdog');
+    try {
+      const files = (await readdir(dir)).filter((f) => /^digest-\d{8}\.md$/.test(f)).sort().reverse();
+      const list = [];
+      for (const f of files.slice(0, 30)) {
+        const st = await stat(path.join(dir, f));
+        list.push({ name: f, mtime: st.mtime.toISOString(), size: st.size });
+      }
+      json(res, 200, { digests: list });
+    } catch (e) { json(res, 500, { error: String(e) }); }
+  }],
+  ['GET', /^\/api\/router\/digest$/, async (req, res) => {
+    const name = new URL(req.url, 'http://x').searchParams.get('name') || '';
+    if (!/^digest-\d{8}\.md$/.test(name)) return json(res, 400, { error: 'bad name' });
+    try {
+      const content = await readFile(path.join(HOME, '.hermes', 'watchdog', name), 'utf8');
+      json(res, 200, { name, content });
+    } catch (e) { json(res, 404, { error: String(e) }); }
   }],
 ];
 

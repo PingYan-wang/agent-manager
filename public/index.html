@@ -201,9 +201,11 @@
   <nav>
     <button data-tab="agents" class="active">Agent 体检</button>
     <button data-tab="mcp">MCP 服务</button>
+    <button data-tab="mcpmkt">MCP 市场</button>
     <button data-tab="skills">已安装 Skills</button>
     <button data-tab="market">Skills 市场</button>
     <button data-tab="orch">任务编排</button>
+    <button data-tab="router">自动路由</button>
   </nav>
 </header>
 <main>
@@ -232,6 +234,19 @@
       <pre>MCP 端点: http://localhost:3000/mcp
 Dashboard:  http://localhost:3000  (账号见 MCPHub Dashboard)
 已配置: Codex · Devin · Windsurf</pre>
+    </div>
+  </section>
+
+  <section id="tab-mcpmkt" style="display:none">
+    <div class="card">
+      <div class="toolbar">
+        <input id="mcpMktSearch" placeholder="搜索官方 Registry，如 filesystem、github、postgres…（≥3 字符）" style="flex:1;min-width:260px" onkeydown="if(event.key==='Enter')searchMcpMarket()">
+        <button class="btn" onclick="searchMcpMarket()">搜索</button>
+        <button class="ghost" onclick="loadMcpMarket()">浏览全部</button>
+        <span class="muted" id="mcpMktCount" style="margin-left:auto"></span>
+      </div>
+      <div class="muted" style="margin-bottom:10px;font-size:11.5px">数据源：<a href="https://registry.modelcontextprotocol.io" target="_blank" style="color:var(--accent)">Official MCP Registry</a> · 安装即写入 MCPHub，所有接入 Agent 自动可用</div>
+      <div id="mcpMktList"><div class="empty">点击「浏览全部」或输入关键词搜索</div></div>
     </div>
   </section>
 
@@ -280,6 +295,31 @@ Dashboard:  http://localhost:3000  (账号见 MCPHub Dashboard)
       <div id="orchList"><div class="empty">暂无任务</div></div>
     </div>
   </section>
+
+  <section id="tab-router" style="display:none">
+    <div class="card">
+      <div class="toolbar"><h3>自动路由</h3><span class="muted" id="routerMeta" style="margin-left:auto"></span></div>
+      <div id="routerStatus"><div class="empty">加载中…</div></div>
+    </div>
+    <div class="card">
+      <div class="toolbar"><h3>路由策略</h3><span class="muted" style="margin-left:auto">auto 按任务自动分类；也可在 Hermes 中手动选 simple / coding / complex / expert</span></div>
+      <div id="routerRoutes"><div class="empty">加载中…</div></div>
+    </div>
+    <div class="card">
+      <div class="toolbar"><h3>今日用量</h3><button class="ghost" style="margin-left:auto" onclick="loadRouter()">↻ 刷新</button></div>
+      <div id="routerStats"><div class="empty">加载中…</div></div>
+      <div class="muted" style="margin-top:10px">最近路由日志</div>
+      <pre class="mono" id="routerLog" style="margin-top:6px;max-height:220px;overflow:auto;background:var(--surface2);border:1px solid var(--line);border-radius:var(--r-sm);padding:10px;font-size:11px;white-space:pre-wrap;word-break:break-all"></pre>
+    </div>
+    <div class="card">
+      <div class="toolbar"><h3>上游余额 / 健康</h3><span class="muted" id="routerBalanceTime" style="margin-left:auto"></span></div>
+      <div id="routerBalance"><div class="empty">加载中…</div></div>
+    </div>
+    <div class="card">
+      <div class="toolbar"><h3>巡检日报</h3><span class="muted" style="margin-left:auto">每天 21:00 由本地看门狗生成</span></div>
+      <div id="routerDigests"><div class="empty">加载中…</div></div>
+    </div>
+  </section>
 </main>
 
 <div class="modal-mask" id="modal"><div class="modal" id="modalBox"></div></div>
@@ -303,11 +343,13 @@ $('#modal').addEventListener('click', e => { if(e.target.id==='modal') closeModa
 document.querySelectorAll('nav button').forEach(b => b.onclick = () => {
   document.querySelectorAll('nav button').forEach(x=>x.classList.remove('active'));
   b.classList.add('active');
-  ['agents','mcp','skills','market','orch'].forEach(t => $('#tab-'+t).style.display = t===b.dataset.tab?'':'none');
+  ['agents','mcp','mcpmkt','skills','market','orch','router'].forEach(t => $('#tab-'+t).style.display = t===b.dataset.tab?'':'none');
   if(b.dataset.tab==='agents') loadAgents();
   if(b.dataset.tab==='mcp') loadServers();
+  if(b.dataset.tab==='mcpmkt') loadMcpMarket();
   if(b.dataset.tab==='skills') loadSkills();
   if(b.dataset.tab==='orch') loadOrch();
+  if(b.dataset.tab==='router') loadRouter();
 });
 
 // ---------- Agent 体检 ----------
@@ -449,6 +491,40 @@ async function saveServer(isEdit){
   toast('已保存 '+name); closeModal(); loadServers();
 }
 
+// ---------- MCP 市场 ----------
+async function searchMcpMarket(){
+  const q = $('#mcpMktSearch').value.trim();
+  loadMcpMarket(q);
+}
+async function loadMcpMarket(q){
+  $('#mcpMktList').innerHTML='<div class="empty">加载中…</div>';
+  const u = '/api/mcp-market' + (q && q.length>=3 ? '?q='+encodeURIComponent(q) : '');
+  const r = await api(u);
+  if(r.error){ $('#mcpMktList').innerHTML=`<div class="empty">加载失败: ${esc(r.error)}</div>`; return; }
+  const list = r.results||[];
+  $('#mcpMktCount').textContent = `${list.length} 个服务`;
+  if(!list.length){ $('#mcpMktList').innerHTML='<div class="empty">没有找到相关 MCP</div>'; return; }
+  $('#mcpMktList').innerHTML = '<table><tbody><tr><th>名称</th><th>描述</th><th>接入方式</th><th>环境变量</th><th>操作</th></tr>' + list.map((s,i)=>`
+    <tr><td><div class="name">${esc(s.title)}</div><div class="muted mono">${esc(s.name)}${s.version?' · v'+esc(s.version):''}</div></td>
+    <td class="desc">${esc((s.description||'').slice(0,160))}</td>
+    <td><span class="badge">${esc(s.via)}</span></td>
+    <td>${s.envRequired?.length?`<span class="badge warn">需 ${s.envRequired.length} 项密钥</span>`:'<span class="muted">—</span>'}</td>
+    <td style="white-space:nowrap">
+      ${s.installable?`<button class="btn" data-act="mcp-mkt-install" data-idx="${i}">安装</button>`:'<span class="muted">不可自动安装</span>'}
+      ${s.homepage?`<a class="ghost" style="display:inline-block;padding:6px 12px;border:1px solid var(--line-strong);border-radius:var(--r-sm);color:var(--muted);text-decoration:none;font-size:12px" href="${esc(s.homepage)}" target="_blank">主页</a>`:''}
+    </td></tr>`).join('')+'</tbody></table>';
+  window._mcpMktCache = list;
+}
+async function mcpMktInstall(idx){
+  const s = (window._mcpMktCache||[])[idx];
+  if(!s) return;
+  if(s.envRequired?.length && !confirm(`该服务需要环境变量：${s.envRequired.join(', ')}\n安装后需在 MCPHub 中补充配置。仍要安装吗？`)) return;
+  toast('正在安装 '+s.name+' …');
+  const r = await api('/api/mcp-market/install', {method:'POST', body:{name:s.name, raw:s._raw}});
+  toast(r.success===false?'安装失败: '+(r.message||''):'已安装 '+s.name+' → MCPHub，agent 重启会话后可用', r.success===false);
+  loadMcpMarket($('#mcpMktSearch').value.trim().length>=3?$('#mcpMktSearch').value.trim():undefined);
+}
+
 // ---------- Skills ----------
 async function loadSkills(){
   const r = await api('/api/skills');
@@ -555,7 +631,8 @@ async function searchSkills(){
   $('#marketList').innerHTML='<div class="empty">搜索中…</div>';
   const r = src==='sh' ? await api('/api/skills/search-sh?q='+encodeURIComponent(q)) : await api('/api/skills/search?q='+encodeURIComponent(q));
   if(r.error){ $('#marketList').innerHTML=`<div class="empty">搜索失败: ${esc(r.error)}</div>`; return; }
-  const list = r.results||[];
+  const list = (r.results||[]).slice();
+  if(src==='sh') list.sort((a,b)=>(b.installs||0)-(a.installs||0)); // skills.sh 按安装量排序
   if(!list.length){ $('#marketList').innerHTML='<div class="empty">没有找到相关 skill</div>'; return; }
   $('#marketList').innerHTML = '<table><tbody><tr><th>名称</th><th>来源</th><th>描述</th><th>状态</th><th>操作</th></tr>' + list.map(s=>`
     <tr><td><div class="name">${esc(s.name)}</div><div class="muted mono">${s.version?'v'+esc(s.version):''}${s.installs!=null?' · '+Number(s.installs).toLocaleString()+' installs':''}</div></td>
@@ -641,6 +718,7 @@ document.addEventListener('click', e => {
   if(act==='srv-reload'){ srvReload(d.name); return; }
   if(act==='srv-edit'){ srvEdit(d.name); return; }
   if(act==='srv-del'){ srvDel(d.name); return; }
+  if(act==='mcp-mkt-install'){ mcpMktInstall(+d.idx); return; }
   if(act==='skill-inspect'){ skillInspect(d.name); return; }
   if(act==='skill-toggle'){ skillToggle(d.name, d.disabled==='true'); return; }
   if(act==='skill-uninstall'){ skillUninstall(d.name); return; }
@@ -649,6 +727,74 @@ document.addEventListener('click', e => {
   if(act==='orch-stop'){ orchAction(d.id,'stop'); return; }
   if(act==='orch-del'){ orchDel(d.id); return; }
 });
+
+// ---------- 自动路由 ----------
+async function loadRouter(){
+  const [st, ss, bl, dg] = await Promise.all([
+    api('/api/router/status'), api('/api/router/stats'), api('/api/router/balance'), api('/api/router/digests')
+  ]);
+  renderRouterStatus(st);
+  renderRouterStats(ss);
+  renderRouterBalance(bl);
+  renderRouterDigests(dg);
+}
+function renderRouterStatus(st){
+  if(!st || st.error){ $('#routerStatus').innerHTML = `<div class="empty">${esc((st&&st.error)||'加载失败')}</div>`; return; }
+  $('#routerMeta').textContent = st.classifier ? `分类器 ${st.classifier}` : '';
+  const badge = (ok, label) => `<span class="badge ${ok?'on':'off'}">${label}</span>`;
+  $('#routerStatus').innerHTML = `<div style="display:flex;gap:8px;flex-wrap:wrap;align-items:center">
+    ${badge(st.routerOk,'路由器 :8788')}${badge(st.ollamaOk,'Ollama')}${badge(!!st.classifier,'本地分类器')}
+    <button class="ghost" onclick="routerRestart()">重启路由器</button></div>`;
+  const rows = Object.entries(st.routes||{}).map(([name,r])=>{
+    const chain = [r.model, ...(r.fallbacks||[])].join(' → ');
+    return `<tr><td class="name">${esc(name)}</td><td class="mono">${esc(chain)}</td><td class="path">${esc(r.host)}</td></tr>`;
+  }).join('');
+  $('#routerRoutes').innerHTML = rows ? `<table><tr><th>路线</th><th>模型链（主 → 备选）</th><th>上游</th></tr>${rows}</table>` : '<div class="empty">无路由配置</div>';
+}
+function renderRouterStats(ss){
+  if(!ss || ss.error){ $('#routerStats').innerHTML = `<div class="empty">${esc((ss&&ss.error)||'加载失败')}</div>`; return; }
+  const chips = Object.entries(ss.counts||{}).map(([k,v])=>`<span class="badge">${esc(k)} × ${v}</span>`).join(' ');
+  $('#routerStats').innerHTML = `<div style="display:flex;gap:8px;flex-wrap:wrap;align-items:center">
+    <span class="badge ${ss.fails?'warn':'on'}">${esc(ss.date)} 共 ${ss.total} 次</span>${chips}
+    <span class="badge ${ss.fails?'warn':'on'}">失败 ${ss.fails}</span>
+    <span class="badge">会话粘性 ${ss.stick}</span></div>`;
+  $('#routerLog').textContent = (ss.tail||[]).join('\n') || '（暂无日志）';
+}
+function renderRouterBalance(bl){
+  if(!bl || bl.error){ $('#routerBalance').innerHTML = `<div class="empty">${esc((bl&&bl.error)||'加载失败')}</div>`; return; }
+  $('#routerBalanceTime').textContent = bl.checked_at ? '更新于 '+bl.checked_at.slice(11,19) : '';
+  const parts = [];
+  if(bl.reverix){
+    const u = bl.reverix.total_usage_usd;
+    parts.push(`<div style="padding:4px 0"><b>Reverix</b> — 累计消耗 <span class="mono">$${esc(u ?? '—')}</span>${bl.reverix.error?' <span class="badge warn">查询失败</span>':''}</div>`);
+  }
+  if(bl.workbuddy && bl.workbuddy.accounts){
+    parts.push('<div style="padding:4px 0"><b>WorkBuddy</b> — ' + bl.workbuddy.accounts.map(a=>`${esc(a.nickname)}(${esc(a.realm)}): ${a.disabled?'禁用':a.cooling?'冷却':'正常'}`).join('，') + '</div>');
+  }
+  if(bl.volcengine && bl.volcengine.note){
+    parts.push(`<div class="muted" style="padding:4px 0"><b>火山</b> — ${esc(bl.volcengine.note)}</div>`);
+  }
+  $('#routerBalance').innerHTML = parts.length ? parts.join('') : '<div class="empty">无数据</div>';
+}
+function renderRouterDigests(dg){
+  const list = (dg && dg.digests) || [];
+  $('#routerDigests').innerHTML = list.length ? list.map(d=>`
+    <div style="display:flex;gap:10px;align-items:center;padding:7px 0;border-bottom:1px solid var(--line)">
+      <span class="mono">${esc(d.name)}</span>
+      <span class="muted">${esc((d.mtime||'').slice(0,16).replace('T',' '))}</span>
+      <button class="ghost" style="margin-left:auto" onclick="viewDigest('${esc(d.name)}')">查看</button>
+    </div>`).join('') : '<div class="empty">暂无日报（每天 21:00 生成）</div>';
+}
+async function viewDigest(name){
+  const r = await api('/api/router/digest?name='+encodeURIComponent(name));
+  modal(`<h3 style="margin-bottom:10px">${esc(r.name||name)}</h3><pre class="mono" style="white-space:pre-wrap;font-size:12px;max-height:60vh;overflow:auto">${esc(r.content||r.error||'')}</pre><div style="margin-top:12px;text-align:right"><button class="ghost" onclick="closeModal()">关闭</button></div>`);
+}
+async function routerRestart(){
+  if(!confirm('重启 Hermes 自动路由器？进行中的请求会断一下。')) return;
+  const r = await api('/api/router/restart', {method:'POST', body:{}});
+  toast(r.ok ? '路由器已重启' : '重启失败', !r.ok);
+  setTimeout(loadRouter, 1500);
+}
 
 // ---------- init ----------
 hubHealth(); loadAgents();

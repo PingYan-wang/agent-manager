@@ -14,6 +14,7 @@
     <key>PATH</key><string>__NODE_DIR__:/usr/local/bin:/opt/homebrew/bin:/usr/bin:/bin</string>
     <key>ADMIN_PASSWORD</key><string>__ADMIN_PASSWORD__</string>
     <key>PORT</key><string>3000</string>
+    <key>API_RATE_LIMIT_MAX</key><string>0</string>
   </dict>
   <key>RunAtLoad</key><true/>
   <key>KeepAlive</key><true/>
