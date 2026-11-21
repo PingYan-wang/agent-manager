@@ -525,8 +525,9 @@ function sanitizeMessages(msgs, keep) {
   return { messages: out, dropped };
 }
 
-function buildPayload(base, prov, drops, tempOverride) {
+function buildPayload(base, prov, drops, tempOverride, extraKeep) {
   const keep = new Set(prov.keepFields || []);
+  if (extraKeep) for (const k of extraKeep) keep.add(k);
   const out = { ...base };
   let dropped = 0;
   for (const k of TOP_DROP) if (k in out && !keep.has(k)) { delete out[k]; dropped++; }
@@ -565,7 +566,16 @@ const RE_TEMP = /temperature[^.]{0,40}only\s*([0-9.]+)\s*is\s*allowed|temperatur
 const RE_FATAL_REQ = /invalid json|json[_\s-]?parse|unexpected token|messages[^.]{0,40}(?:is required|are required|must be an array|must be provided)|no messages|request body[^.]{0,30}(?:required|invalid|empty)/i;
 
 // 「字段不被支持」→ 就地降级重试同一目标，而不是放弃整条链
+// 注意顺序：语义相反的规则必须排在前面。DeepSeek 新版推理模型的报错文案是
+// "The `reasoning_content` in the thinking mode must be passed back to the API."——
+// 它要求**回传**思维链，而下面 reasoning-echo 规则是剥掉思维链。若顺序颠倒，
+// 会把这类错误当成「上游不认这个字段」，剥掉后重试必然再失败一次，白丢一次尝试。
 const HEAL = [
+  {
+    re: /reasoning_content[^.]{0,80}(?:must be (?:passed|sent|provided|included|echoed)|(?:is|are) required)|must be (?:passed|sent) back|thinking mode[^.]{0,40}(?:required|must)/i,
+    label: 'reasoning-keep',
+    keep: ['reasoning_content'],
+  },
   {
     re: /reasoning_content|protocol conversion|preserve the requested feature|unsupported protocol/i,
     label: 'reasoning-echo',
@@ -1297,6 +1307,7 @@ const server = http.createServer(async (req, res) => {
       let lastCls = null;
       let i = 0;
       const drops = new Set();      // 被上游证明不支持的顶层字段（跨目标累积）
+      const keeps = new Map();      // pid -> Set(必须回传的字段)，按厂商隔离，避免影响别的厂商
       const healed = new Set();     // pid|model|label，每个目标每种自愈只做一次
       let tempOverride;
       const t0 = Date.now();
@@ -1320,7 +1331,7 @@ const server = http.createServer(async (req, res) => {
           i++;
           continue;
         }
-        const built = buildPayload(basePayload, prov, drops, tempOverride);
+        const built = buildPayload(basePayload, prov, drops, tempOverride, keeps.get(step.pid));
         const payload = built.payload;
         const r = await forwardOnce(prov, step.model, payload, res);
         if (res.destroyed) {
@@ -1383,7 +1394,12 @@ const server = http.createServer(async (req, res) => {
           const hk = `${step.pid}|${step.model}|${heal.label}`;
           if (!healed.has(hk)) {
             healed.add(hk);
-            for (const k of heal.drop) drops.add(k);
+            for (const k of heal.drop || []) drops.add(k);
+            if (heal.keep) {
+              const s = keeps.get(step.pid) || new Set();
+              for (const k of heal.keep) s.add(k);
+              keeps.set(step.pid, s);
+            }
             if (heal.label === 'max-tokens' && basePayload.max_completion_tokens != null) {
               basePayload.max_tokens = basePayload.max_completion_tokens;
               delete basePayload.max_completion_tokens;
@@ -1391,7 +1407,7 @@ const server = http.createServer(async (req, res) => {
             if (heal.label === 'developer-role' && Array.isArray(basePayload.messages)) {
               basePayload.messages = basePayload.messages.map((m) => (m && m.role === 'developer' ? { ...m, role: 'system' } : m));
             }
-            console.log(`[router] ${nowIso()} route=${route} model=${step.model} provider=${step.pid} fix=${heal.label} drop=[${heal.drop.join(',')}]`);
+            console.log(`[router] ${nowIso()} route=${route} model=${step.model} provider=${step.pid} fix=${heal.label} drop=[${(heal.drop || []).join(',')}]${heal.keep ? ` keep=[${heal.keep.join(',')}]` : ''}`);
             continue; // 同一目标重试（已降级）
           }
         }

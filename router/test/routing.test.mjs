@@ -65,6 +65,7 @@ fs.writeFileSync(path.join(tmp, 'config.json'), JSON.stringify({
     expert: { chain: [{ provider: 'pf', models: ['reqbad', 'good-a'] }] },
     bal: { chain: [{ provider: 'pi', models: ['balance', 'good-a'] }, { provider: 'pb', models: ['good-b'] }] },
     rc: { chain: [{ provider: 'pk', models: ['rc'] }] },
+    rcmust: { chain: [{ provider: 'pk', models: ['rcmust'] }] },
     think: { chain: [{ provider: 'pk', models: ['think'] }] },
     notools: { chain: [{ provider: 'pl', models: ['notools'] }] },
     weird: { chain: [{ provider: 'pl', models: ['weird400', 'good-a'] }] },
@@ -233,6 +234,23 @@ try {
   check('上游未收到 reasoning_content', c8.length === 1 && c8[0].rc === false, JSON.stringify(c8));
   check('上游未收到 reasoning_effort', c8.length === 1 && c8[0].eff === false, JSON.stringify(c8));
   check('默认净化无需二次重试', c8.length === 1, `calls=${c8.length}`);
+
+  // 8b 思维链必须回传（DeepSeek 新版推理模型）→ 认错方向：保留字段而不是剥掉
+  // 判据：一次 400 之后自愈必须成功；若沿用 reasoning-echo（剥掉）则同一目标再失败一次
+  await resetCalls();
+  const r8b = await post(ask('case8b', 'rcmust', {
+    messages: [
+      { role: 'user', content: 'hi' },
+      { role: 'assistant', content: 'yo', reasoning_content: '内部推理', tool_calls: [{ id: 'c1', type: 'function', function: { name: 'f', arguments: '{}' } }] },
+      { role: 'tool', tool_call_id: 'c1', content: 'ok' },
+      { role: 'user', content: '继续' },
+    ],
+    reasoning_effort: 'high',
+  }));
+  const c8b = await calls();
+  check('要求回传思维链时最终成功', r8b.status === 200, `status=${r8b.status} ${r8b.text.slice(0, 200)}`);
+  check('自愈方向为保留而非剥离', /fix=reasoning-keep.*keep=\[reasoning_content\]/.test(log), log.slice(-800));
+  check('自愈后同一目标成功（不换厂商、不放弃）', c8b.length === 2 && c8b[c8b.length - 1].rc === true, JSON.stringify(c8b));
 
   // 9 本地模型不支持 thinking（Ollama 400）→ 同样净化后直通
   await resetCalls();

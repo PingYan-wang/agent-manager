@@ -32,6 +32,11 @@ const server = http.createServer(async (req, res) => {
   const call = calls[calls.length - 1];
   res.on('close', () => { call.closed = true; });
   const json = (st, obj) => { res.writeHead(st, { 'content-type': 'application/json' }); res.end(JSON.stringify(obj)); };
+  if (model === 'tier-classifier' || model === 'tier-classifier-expert') {
+    const text = String(msgs.at(-1)?.content || '');
+    const tier = model === 'tier-classifier-expert' ? 'EXPERT' : (text.match(/#TIER=(SIMPLE|CODING|COMPLEX|EXPERT)/)?.[1] || 'SIMPLE');
+    return json(200, { choices: [{ message: { content: tier } }] });
+  }
   const sse = (mode = 'done') => {
     res.writeHead(200, { 'content-type': 'text/event-stream' });
     res.write('data: {"id":"mock","choices":[{"delta":{"role":"assistant"}}]}\n\n');
@@ -99,6 +104,18 @@ const server = http.createServer(async (req, res) => {
       return json(400, {
         error: {
           message: '[ReverixAI] Unsupported protocol conversion\nThis protocol conversion cannot preserve the requested feature in: messages.reasoning_content.',
+          type: 'invalid_request_error',
+        },
+      });
+    }
+    return sse();
+  }
+  // DeepSeek 新版推理模型的真实形态：思维链**必须回传**，剥掉会 400
+  if (model === 'rcmust') {
+    if (!calls[calls.length - 1].rc) {
+      return json(400, {
+        error: {
+          message: 'The `reasoning_content` in the thinking mode must be passed back to the API.',
           type: 'invalid_request_error',
         },
       });

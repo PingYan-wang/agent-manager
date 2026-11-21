@@ -1,8 +1,6 @@
 {
   "version": 2,
   "port": 8788,
-  "ollamaUrl": "http://127.0.0.1:11434",
-  "classifierModel": "qwen2.5:3b-instruct",
   "upstreamTimeoutMs": 600000,
   "providers": {
     "volc": {
@@ -29,55 +27,165 @@
         "maxMessages": 100
       }
     },
-    "local": {
-      "baseUrl": "http://127.0.0.1:11434/v1",
-      "apiKey": "ollama",
-      "label": "本地 Ollama（仅纯聊天）",
+    "trae": {
+      "baseUrl": "http://127.0.0.1:7864/v1",
+      "apiKey": "trae-local-key",
+      "label": "Trae SOLO API",
+      "cost": 0,
       "capabilities": {
-        "tools": false,
-        "stream": true,
-        "maxChars": 6000,
-        "maxMessages": 12,
-        "tiers": ["simple"]
+        "maxChars": 120000,
+        "maxMessages": 200
       }
+    },
+    "deepseek": {
+      "baseUrl": "https://api.deepseek.com/v1",
+      "apiKey": "[REDACTED]",
+      "label": "DeepSeek 官方",
+      "keepFields": [
+        "reasoning_content"
+      ],
+      "_comment": "新版推理模型要求把 messages[].reasoning_content 原样回传，剥掉会 400 must be passed back"
     }
   },
   "routes": {
     "simple": {
       "strategy": "priority",
       "chain": [
-        { "provider": "volc", "models": ["deepseek-v4.1-flash"] }
+        {
+          "provider": "volc",
+          "models": [
+            "deepseek-v4.1-flash"
+          ]
+        },
+        {
+          "provider": "trae",
+          "models": [
+            "glm-5-turbo",
+            "DeepSeek-V4-Flash-Official"
+          ]
+        },
+        {
+          "provider": "devin",
+          "models": [
+            "swe-2-flash-high"
+          ]
+        }
       ]
     },
     "coding": {
       "strategy": "priority",
       "chain": [
-        { "provider": "volc", "models": ["kimi-k3.1-pro", "doubao-seed-2.1-pro"] },
-        { "provider": "reverix", "models": ["claude-opus-5-5", "gpt-6.1-sol"] },
-        { "provider": "devin", "models": ["devin-opus", "devin-gpt", "devin-gemini"] }
+        {
+          "provider": "volc",
+          "models": [
+            "kimi-k3.1-pro",
+            "doubao-seed-2.1-pro"
+          ]
+        },
+        {
+          "provider": "devin",
+          "models": [
+            "swe-2-high"
+          ]
+        },
+        {
+          "provider": "trae",
+          "models": [
+            "kimi-k2.7-code",
+            "seed-code-pro-0430"
+          ]
+        },
+        {
+          "provider": "reverix",
+          "models": [
+            "claude-opus-5-5",
+            "gpt-6.1-sol"
+          ]
+        }
       ]
     },
     "complex": {
-      "strategy": "latency",
+      "strategy": "priority",
       "chain": [
-        { "provider": "reverix", "models": ["claude-opus-5-5", "gpt-6.1-sol"] },
-        { "provider": "devin", "models": ["devin-opus", "devin-gpt", "devin-gemini"] },
-        { "provider": "volc", "models": ["glm-5.3"] }
+        {
+          "provider": "reverix",
+          "models": [
+            "claude-opus-5-5",
+            "gpt-6.1-sol"
+          ]
+        },
+        {
+          "provider": "devin",
+          "models": [
+            "swe-2-high"
+          ]
+        },
+        {
+          "provider": "volc",
+          "models": [
+            "glm-5.3"
+          ]
+        },
+        {
+          "provider": "trae",
+          "models": [
+            "Doubao-Seed-2.1-Pro",
+            "glm-5.3"
+          ]
+        }
       ]
     },
     "expert": {
       "strategy": "priority",
       "chain": [
-        { "provider": "reverix", "models": ["claude-fable-5-2", "claude-opus-5-5"] },
-        { "provider": "devin", "models": ["devin-opus", "devin-gpt", "devin-gemini"] },
-        { "provider": "volc", "models": ["glm-5.3"] }
+        {
+          "provider": "reverix",
+          "models": [
+            "claude-fable-5-2",
+            "claude-opus-5-5"
+          ]
+        },
+        {
+          "provider": "devin",
+          "models": [
+            "swe-2-high"
+          ]
+        },
+        {
+          "provider": "volc",
+          "models": [
+            "glm-5.3"
+          ]
+        },
+        {
+          "provider": "trae",
+          "models": [
+            "glm-5.3",
+            "DeepSeek-V4-Pro"
+          ]
+        }
       ]
     }
   },
   "reserve": [
-    { "provider": "reverix", "models": ["gpt-6.1-sol"] },
-    { "provider": "volc", "models": ["glm-5.3"] },
-    { "provider": "local", "models": ["qwen2.5:3b-instruct"] }
+    {
+      "provider": "reverix",
+      "models": [
+        "gpt-6.1-sol"
+      ]
+    },
+    {
+      "provider": "volc",
+      "models": [
+        "glm-5.3"
+      ]
+    },
+    {
+      "provider": "trae",
+      "models": [
+        "glm-5.3"
+      ]
+    }
   ],
   "guard": {
     "upgradeOnTools": true,
@@ -91,7 +199,12 @@
     "windowMs": 300000,
     "escalateAfter": 2,
     "crossTier": true,
-    "tiers": ["simple", "coding", "complex", "expert"]
+    "tiers": [
+      "simple",
+      "coding",
+      "complex",
+      "expert"
+    ]
   },
   "breaker": {
     "quotaMs": 900000,
@@ -107,6 +220,8 @@
     "model": ""
   },
   "budgets": {
-    "reverix.ai": { "usd": 20 }
+    "reverix.ai": {
+      "usd": 20
+    }
   }
 }
