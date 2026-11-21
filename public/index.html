@@ -7,10 +7,10 @@
 <style>
   :root{
     --bg:#f6f3ec; --surface:#fdfcf8; --surface2:#f3efe6;
-    --ink:#211d19; --muted:#7d7468; --faint:#b3aa9c;
-    --line:#e4ddd0; --line-strong:#cfc6b4;
-    --accent:#b23c1a; --accent-soft:rgba(178,60,26,.08); --accent-line:rgba(178,60,26,.35);
-    --ok:#3e7c4f; --warn:#a8741a; --danger:#a83226;
+    --ink:#211d19; --muted:#665c4e; --faint:#857b6a;
+    --line:#ddd3bf; --line-strong:#c4b8a2;
+    --accent:#a93a1c; --accent-soft:rgba(169,58,28,.08); --accent-line:rgba(169,58,28,.35);
+    --ok:#2f6b3f; --warn:#8a5f0d; --danger:#9c2f21;
     --serif:"Songti SC","STSong","Noto Serif SC","Source Han Serif SC",serif;
     --mono:ui-monospace,"SF Mono","JetBrains Mono",Menlo,Consolas,monospace;
     --sans:-apple-system,"PingFang SC","Hiragino Sans GB","Microsoft YaHei",sans-serif;
@@ -48,7 +48,12 @@
     background:transparent;border:none;color:var(--muted);
     padding:8px 13px;border-radius:var(--r-sm);cursor:pointer;font-size:13px;
     transition:color .15s;position:relative;
+    display:inline-flex;align-items:center;gap:7px;
   }
+  .nav-ic{width:19px;height:19px;border-radius:5px;object-fit:cover;flex:none;opacity:.9;transition:transform .15s var(--ease),opacity .15s}
+  nav button:hover .nav-ic{transform:translateY(-1px);opacity:1}
+  nav button.active .nav-ic{opacity:1;box-shadow:0 0 0 1.5px var(--accent-line)}
+  .logo-ic{width:28px;height:28px;border-radius:8px;object-fit:cover;flex:none;align-self:center}
   nav button:hover{color:var(--ink)}
   nav button.active{color:var(--ink);font-weight:600}
   nav button.active::after{content:"";position:absolute;left:13px;right:13px;bottom:2px;height:2px;background:var(--accent)}
@@ -94,7 +99,7 @@
 
   table{width:100%;border-collapse:collapse;font-size:12.5px}
   th{
-    text-align:left;color:var(--faint);font-weight:500;padding:8px 10px;
+    text-align:left;color:var(--muted);font-weight:600;padding:8px 10px;
     border-bottom:1px solid var(--line-strong);white-space:nowrap;
     font-size:11px;letter-spacing:.06em;
   }
@@ -110,10 +115,10 @@
   }
   .badge::before{content:"";width:5px;height:5px;border-radius:50%;background:currentColor;opacity:.65}
   .badge.on{color:var(--ok);border-color:rgba(62,124,79,.4)}
-  .badge.off{color:var(--faint)}
+  .badge.off{color:var(--muted)}
   .badge.warn{color:var(--warn);border-color:rgba(168,116,26,.4)}
   .desc{color:var(--muted);font-size:11.5px;max-width:540px;word-break:break-all;line-height:1.55}
-  .empty{text-align:center;color:var(--faint);padding:44px 0;font-size:12px;letter-spacing:.04em}
+  .empty{text-align:center;color:var(--muted);padding:44px 0;font-size:12px;letter-spacing:.04em}
   .muted{color:var(--muted);font-size:11.5px}
   code,.mono{font-family:var(--mono)}
 
@@ -136,10 +141,58 @@
   .mkt-item:last-child{border-bottom:none}
   .mkt-item .mkt-main{flex:1;min-width:0}
   .mkt-item .mkt-name{font-weight:600;font-size:12.5px}
-  .mkt-item .mkt-meta{color:var(--faint);font-size:11px;font-family:var(--mono);margin-top:1px}
+  .mkt-item .mkt-meta{color:var(--muted);font-size:11px;font-family:var(--mono);margin-top:1px}
   .mkt-item .mkt-reason{color:var(--accent);font-size:11px;margin-top:3px}
   .mkt-item .mkt-why{color:var(--muted);font-size:11px;margin-top:3px}
-  .mkt-empty{color:var(--faint);font-size:12px;padding:14px 4px}
+  .mkt-empty{color:var(--muted);font-size:12px;padding:14px 4px}
+
+  /* ---- 任务编排（deep-chat 会话式界面） ---- */
+  .orch-app{display:flex;flex-direction:column;height:calc(100vh - 150px);min-height:540px}
+  .orch-top{display:flex;align-items:center;gap:12px;padding:2px 2px 12px;flex:none}
+  .orch-top-title{font-family:var(--serif);font-size:16px;font-weight:600;letter-spacing:.03em}
+  .orch-top-sub{font-family:var(--sans);font-size:11.5px;color:var(--muted);font-weight:400;margin-left:10px;letter-spacing:0}
+  .orch-top-right{margin-left:auto;display:flex;align-items:center;gap:8px}
+  .orch-body{display:flex;gap:14px;flex:1;min-height:0}
+  .orch-side{width:290px;flex:none;display:flex;flex-direction:column;border:1px solid var(--line);border-radius:var(--r-lg);background:var(--surface);overflow:hidden}
+  .orch-side-head{display:flex;justify-content:space-between;align-items:center;padding:10px 14px;border-bottom:1px solid var(--line);font-size:12px;font-weight:600;letter-spacing:.06em;color:var(--muted)}
+  #orchList{flex:1;overflow-y:auto;padding:6px}
+  .orch-item{display:block;width:100%;text-align:left;background:none;border:none;border-radius:var(--r-sm);padding:9px 11px;cursor:pointer;transition:background .12s}
+  .orch-item:hover{background:rgba(34,30,24,.035)}
+  .orch-item.sel{background:var(--accent-soft);box-shadow:inset 2px 0 0 var(--accent)}
+  .orch-item .oi-goal{font-size:12.5px;color:var(--ink);display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical;line-height:1.45;word-break:break-all}
+  .orch-item .oi-meta{display:flex;align-items:center;gap:7px;margin-top:5px;font-size:10.5px;color:var(--muted);font-family:var(--mono)}
+  .oi-dot{width:7px;height:7px;border-radius:50%;flex:none}
+  .orch-main{flex:1;display:flex;flex-direction:column;min-width:0;border:1px solid var(--line);border-radius:var(--r-lg);background:var(--surface);overflow:hidden}
+  .orch-taskbar{flex:none;border-bottom:1px solid var(--line);padding:10px 16px;display:flex;flex-direction:column;gap:8px;background:var(--surface)}
+  .orch-taskbar .tb-goal{font-size:13px;font-weight:600;display:flex;align-items:center;gap:8px;flex-wrap:wrap}
+  .orch-taskbar .tb-goal .muted{font-weight:400;font-size:11px;font-family:var(--mono)}
+  .orch-taskbar .tb-ctrl{display:flex;gap:6px;flex-wrap:wrap;align-items:center}
+  .orch-taskbar .tb-ctrl .sp{flex:1}
+  deep-chat.orch-chat{flex:1;min-height:0;display:block}
+  .orch-composer{flex:none;border-top:1px solid var(--line);padding:12px 16px 10px;background:var(--surface)}
+  .orch-composer-row{display:flex;gap:8px;align-items:center}
+  .orch-composer-row #orchClient{width:auto;flex:none}
+  .orch-composer-row #orchWorkdir{width:180px;flex:none}
+  .orch-composer-row #orchGoal{flex:1;min-width:0}
+  .orch-composer-hint{font-size:10.5px;margin-top:6px}
+  .orch-drawer-mask{position:fixed;inset:0;background:rgba(34,30,24,.35);display:none;z-index:60;backdrop-filter:blur(2px)}
+  .orch-drawer-mask.show{display:block}
+  .orch-drawer{position:fixed;top:0;right:0;bottom:0;width:400px;max-width:92vw;background:var(--surface);border-left:1px solid var(--line-strong);z-index:61;transform:translateX(102%);transition:transform .3s var(--ease);overflow-y:auto;padding:22px 24px;box-shadow:-16px 0 48px -20px rgba(34,30,24,.25)}
+  .orch-drawer.show{transform:none}
+  .orch-drawer h3{font-family:var(--serif);font-size:15.5px;font-weight:600;letter-spacing:.03em;margin-bottom:4px}
+  .orch-drawer .od-sub{font-size:11.5px;color:var(--muted);margin-bottom:18px}
+  .orch-set-group{margin-bottom:20px}
+  .orch-set-group h4{font-size:11px;color:var(--muted);letter-spacing:.08em;margin-bottom:9px;font-weight:600}
+  .orch-set-row{display:flex;gap:10px;align-items:flex-start;padding:8px 0;border-bottom:1px dashed var(--line)}
+  .orch-set-row:last-child{border-bottom:none}
+  .orch-set-row .sr-txt{flex:1;min-width:0}
+  .orch-set-row .sr-txt b{font-size:12.5px;font-weight:600}
+  .orch-set-row .sr-txt .muted{font-size:11px;display:block;margin-top:2px;line-height:1.5}
+  .orch-set-row select,.orch-set-row input[type=number]{width:auto;flex:none}
+  .orch-num{display:flex;align-items:center;gap:6px;font-size:12px;color:var(--muted)}
+  .orch-num input{width:64px}
+  .orch-agents{display:flex;gap:6px;flex-wrap:wrap}
+  .orch-planner{font-size:11.5px;color:var(--muted);background:var(--surface2);border:1px solid var(--line);border-radius:var(--r-sm);padding:9px 11px;line-height:1.6}
 
   /* ---- Agent 卡片 ---- */
   .agent-grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(360px,1fr));gap:14px}
@@ -151,7 +204,7 @@
   .agent-card.disabled{opacity:.45}
   .agent-head{display:flex;align-items:center;gap:9px;margin-bottom:4px}
   .agent-head .name{font-family:var(--serif);font-size:14.5px;font-weight:600;letter-spacing:.03em}
-  .agent-head .cnt{margin-left:auto;font-family:var(--mono);font-size:10.5px;color:var(--faint);letter-spacing:.04em}
+  .agent-head .cnt{margin-left:auto;font-family:var(--mono);font-size:10.5px;color:var(--muted);letter-spacing:.04em}
 
   .fold{border-top:1px solid var(--line);margin-top:10px}
   .fold:first-of-type{border-top:none}
@@ -163,7 +216,7 @@
   }
   .fold-head:hover{color:var(--ink)}
   .fold-head .n{
-    margin-left:auto;font-family:var(--mono);font-size:10.5px;color:var(--faint);
+    margin-left:auto;font-family:var(--mono);font-size:10.5px;color:var(--muted);
     border:1px solid var(--line);border-radius:20px;padding:1px 8px;letter-spacing:.02em;background:var(--surface2);
   }
   .fold-head .chev{transition:transform .25s var(--ease);color:var(--faint);font-size:9px}
@@ -175,7 +228,7 @@
   .mini-table{width:100%;border-collapse:collapse;font-size:11.5px;margin:2px 0 8px}
   .mini-table td{padding:5px 4px;border-bottom:1px solid var(--line);color:var(--ink)}
   .mini-table tr:last-child td{border-bottom:none}
-  .mini-table th{padding:4px;font-size:10.5px;letter-spacing:.06em;color:var(--faint);font-weight:500;text-align:left}
+  .mini-table th{padding:4px;font-size:10.5px;letter-spacing:.06em;color:var(--muted);font-weight:600;text-align:left}
   .mini-table .path{font-family:var(--mono);font-size:10.5px;color:var(--muted);word-break:break-all}
 
   /* ---- 弹窗 ---- */
@@ -211,24 +264,25 @@
   }
   .switch{position:relative;width:34px;height:19px;display:inline-block;flex:none}
   .switch input{opacity:0;width:0;height:0;position:absolute}
-  .switch .sl{position:absolute;inset:0;background:#ddd5c6;border:1px solid var(--line-strong);border-radius:20px;transition:.2s;cursor:pointer}
+  .switch .sl{position:absolute;inset:0;background:#c9bfa9;border:1px solid var(--line-strong);border-radius:20px;transition:.2s;cursor:pointer}
   .switch .sl:before{content:"";position:absolute;width:13px;height:13px;left:2px;top:2px;background:var(--surface);border-radius:50%;transition:.2s var(--ease);box-shadow:0 1px 2px rgba(0,0,0,.15)}
   .switch input:checked+.sl{background:var(--accent)}
   .switch input:checked+.sl:before{transform:translateX(15px)}
   .switch input:focus-visible+.sl{outline:2px solid var(--accent);outline-offset:2px}
 </style>
+<script src="/lib/deep-chat.js" defer></script>
 </head>
 <body>
 <header>
-  <div class="logo"><b>AGENT</b><span>MANAGER</span><i>v1.0</i></div>
+  <div class="logo"><img class="logo-ic" src="/icons/logo.png" alt=""><b>AGENT</b><span>MANAGER</span><i>v1.0</i></div>
   <div class="status"><span class="dot" id="hubDot"></span><span id="hubText">MCPHub 连接中…</span></div>
   <nav>
-    <button data-tab="agents" class="active">Agent 体检</button>
-    <button data-tab="mcp">MCP 服务</button>
-    <button data-tab="skills">已安装 Skills</button>
-    <button data-tab="orch">任务编排</button>
-    <button data-tab="router">自动路由</button>
-    <button data-tab="proxy">反代</button>
+    <button data-tab="agents" class="active"><img class="nav-ic" src="/icons/agents.png" alt="">Agent 体检</button>
+    <button data-tab="mcp"><img class="nav-ic" src="/icons/mcp.png" alt="">MCP 服务</button>
+    <button data-tab="skills"><img class="nav-ic" src="/icons/skills.png" alt="">已安装 Skills</button>
+    <button data-tab="orch"><img class="nav-ic" src="/icons/orch.png" alt="">任务编排</button>
+    <button data-tab="router"><img class="nav-ic" src="/icons/router.png" alt="">自动路由</button>
+    <button data-tab="proxy"><img class="nav-ic" src="/icons/proxy.png" alt="">反代</button>
   </nav>
 </header>
 <main>
@@ -324,26 +378,39 @@ Dashboard:  http://localhost:3000  (账号见 MCPHub Dashboard)
   </section>
 
   <section id="tab-orch" style="display:none">
-    <div class="card">
-      <div class="toolbar"><h3>编排开关</h3></div>
-      <div id="orchConfig"><div class="empty">加载中…</div></div>
-    </div>
-    <div class="card">
-      <div class="toolbar">
-        <h3>新建任务</h3>
-        <button class="ghost" style="margin-left:auto" onclick="loadOrch()">↻ 刷新</button>
+    <div class="orch-app">
+      <div class="orch-top">
+        <div class="orch-top-title">任务编排<span class="orch-top-sub">拆解 → 派发 → 辩论 → 验收 → 自动续步</span></div>
+        <div class="orch-top-right">
+          <span id="orchTopStatus" class="muted"></span>
+          <button class="ghost" onclick="loadOrch()" title="刷新">↻</button>
+          <button class="ghost" id="orchSetBtn" onclick="toggleOrchSettings()">⚙ 编排设置</button>
+        </div>
       </div>
-      <div style="display:flex;gap:8px;flex-wrap:wrap">
-        <input id="orchGoal" placeholder="任务目标，例如：调研并实现 XX 功能，直至验收" style="flex:3;min-width:280px">
-        <input id="orchWorkdir" placeholder="工作目录(可选)" style="flex:1;min-width:180px">
-        <button class="btn" onclick="orchCreate()">创建任务</button>
+      <div class="orch-body">
+        <aside class="orch-side">
+          <div class="orch-side-head"><span>任务</span><span class="muted" id="orchCount"></span></div>
+          <div id="orchList"><div class="empty">暂无任务</div></div>
+        </aside>
+        <main class="orch-main">
+          <div id="orchTaskBar" class="orch-taskbar"></div>
+          <deep-chat id="orchChatEl" class="orch-chat"></deep-chat>
+          <div class="orch-composer">
+            <div class="orch-composer-row">
+              <select id="orchClient" title="单 Client 模式下的执行客户端（跨 Client 开启时由编排器分配）">
+                <option value="">自动</option>
+              </select>
+              <input id="orchWorkdir" placeholder="工作目录(可选)">
+              <input id="orchGoal" placeholder="描述任务目标，回车开始编排…" onkeydown="if(event.key==='Enter')orchCreate()">
+              <button class="btn" onclick="orchCreate()">开始</button>
+            </div>
+            <div class="orch-composer-hint muted">任务自动拆解→派发子 Agent→验收→(可选)自动续步优化 · 「自动」跟随编排设置中的执行 Client</div>
+          </div>
+        </main>
       </div>
-      <div class="muted" style="margin-top:6px;font-size:11px">任务会自动拆解→派发子 Agent→验收→(可选)自动规划下一步优化。子 Agent 当前可用: Hermes；Codex/Devin 需先登录各自 CLI。</div>
     </div>
-    <div class="card">
-      <div class="toolbar"><h3>任务列表</h3><span class="muted" id="orchCount" style="margin-left:auto"></span></div>
-      <div id="orchList"><div class="empty">暂无任务</div></div>
-    </div>
+    <div class="orch-drawer-mask" id="orchSetMask" onclick="toggleOrchSettings()"></div>
+    <aside class="orch-drawer" id="orchDrawer"><div id="orchConfig"><div class="empty">加载中…</div></div></aside>
   </section>
 
   <section id="tab-router" style="display:none">
@@ -899,8 +966,10 @@ function renderOrchList(tasks){
 function renderOrchComposer(){
   const sel = $('#orchClient'); if(!sel) return;
   const cur = sel.value;
-  sel.innerHTML = '<option value="">自动</option>' + orchAgents.map(a=>
-    `<option value="${a.id}" ${a.available?'':'disabled'}>${esc(a.label||a.id)}${a.available?'':'（不可用）'}</option>`).join('');
+  sel.innerHTML = '<option value="">自动</option>' + orchAgents.map(a=>{
+    const crossBlocked = a.crossOnly && !orchCfg?.crossClient;
+    return `<option value="${a.id}" ${(!a.available||crossBlocked)?'disabled':''}>${esc(a.label||a.id)}${a.available?'':'（不可用）'}${crossBlocked?'（需跨Client）':''}</option>`;
+  }).join('');
   sel.value = cur;
 }
 
@@ -936,19 +1005,47 @@ function orchBuildMessages(t){
     msgs.push({role:'planner', text:'**执行计划**\n'+steps.map(s=>
       `${STEP_ICON[s.status]||'⚪'} \`${s.id}\` ${s.title} → ${s.agent||'?'}${s.needsDebate?' ⚔️辩论':''}`).join('\n')});
   }
-  const feed = [
-    ...steps.filter(s=>s.ts).map(s=>({ts:s.ts, kind:'step', s})),
-    ...(t.log||[]).map(l=>({ts:l.ts, kind:'log', l})),
-  ].sort((a,b)=>a.ts-b.ts);
-  for(const ev of feed){
-    if(ev.kind==='log'){
-      const lv = ev.l.level==='warn'?'⚠️ ':ev.l.level==='error'?'⛔ ':'';
-      msgs.push({role:'system', text:`${orchTime(ev.l.ts)} ${lv}${ev.l.msg}`});
-    } else {
-      const s = ev.s, st = ORCH_ST_TXT[s.status]||s.status;
-      let txt = `**${s.id} · ${s.title}** — ${st} · ${s.agent||''}${s.needsDebate?' · 辩论':''}`;
-      if(s.result) txt += `\n\n${String(s.result).slice(0,4000)}`;
-      msgs.push({role: ORCH_AGENT_ROLE[s.agent] || 'ai', text: txt});
+  // 时间线：优先用执行树节点（含重试/裁决/验收/续步节点，带时间戳），旧任务回退步骤+日志
+  const NT = {pending:'排队',running:'执行中',retrying:'重试中',done:'完成',failed:'失败',awaiting:'待裁决',blocked:'已阻塞',paused:'已暂停',verifying:'验收中'};
+  const logs = (t.log||[]).map(l=>({ts:l.ts, kind:'log', l}));
+  const tree = t.tree || [];
+  if(tree.length){
+    const feed = [
+      ...tree.filter(n=>n.ts && !['goal','plan'].includes(n.kind)).map(n=>({ts:n.ts, kind:'node', n})),
+      ...logs,
+    ].sort((a,b)=>a.ts-b.ts);
+    for(const ev of feed){
+      if(ev.kind==='log'){
+        const lv = ev.l.level==='warn'?'⚠️ ':ev.l.level==='error'?'⛔ ':'';
+        msgs.push({role:'system', text:`${orchTime(ev.l.ts)} ${lv}${ev.l.msg}`});
+        continue;
+      }
+      const n = ev.n;
+      if(n.kind==='step'){
+        let txt = `**${n.label||n.id}** — ${NT[n.status]||n.status}${n.agent?' · '+n.agent:''}${n.attempt>1?' · 第'+n.attempt+'次':''}`;
+        if(n.detail) txt += `\n\n${n.detail}`;
+        msgs.push({role: ORCH_AGENT_ROLE[n.agent] || 'ai', text: txt});
+      } else if(n.kind==='review'){
+        msgs.push({role:'review', text:`**人工裁决** — ${NT[n.status]||n.status}${n.detail?'\n\n'+n.detail:''}`});
+      } else {
+        msgs.push({role:'planner', text:`**${n.label||n.kind}** — ${NT[n.status]||n.status}${n.detail?'\n\n'+n.detail:''}`});
+      }
+    }
+  } else {
+    const feed = [
+      ...steps.filter(s=>s.ts).map(s=>({ts:s.ts, kind:'step', s})),
+      ...logs,
+    ].sort((a,b)=>a.ts-b.ts);
+    for(const ev of feed){
+      if(ev.kind==='log'){
+        const lv = ev.l.level==='warn'?'⚠️ ':ev.l.level==='error'?'⛔ ':'';
+        msgs.push({role:'system', text:`${orchTime(ev.l.ts)} ${lv}${ev.l.msg}`});
+      } else {
+        const s = ev.s, st = ORCH_ST_TXT[s.status]||s.status;
+        let txt = `**${s.id} · ${s.title}** — ${st} · ${s.agent||''}${s.needsDebate?' · 辩论':''}`;
+        if(s.result) txt += `\n\n${String(s.result).slice(0,4000)}`;
+        msgs.push({role: ORCH_AGENT_ROLE[s.agent] || 'ai', text: txt});
+      }
     }
   }
   if(t.summary) msgs.push({role:'planner', text:'**验收总结**\n'+t.summary});
@@ -1278,7 +1375,7 @@ function renderUsageDetail(){
   h += '</div>';
   if(rcUsageExpanded){
     const items = (d.items||[]).filter(x=>x.route===rcUsageExpanded && x.today>0).sort((a,b)=>b.today-a.today);
-    h += items.length ? '<table style="margin-top:6px"><tr><th>模型</th><th>服务商</th><th>今日</th><th>7天</th><th>失败</th></tr>' + items.map(x=>`<tr><td class="name">${esc(x.model)}</td><td class="path">${esc(x.host||'—')}</td><td>${x.today}</td><td>${x.count}</td><td>${x.fails?`<span style="color:#e5534b">${x.fails}</span>`:'0'}</td></tr>`).join('') + '</table>' : '<div class="empty">该路线今日暂无记录</div>';
+    h += items.length ? '<table style="margin-top:6px"><tr><th>模型</th><th>服务商</th><th>今日</th><th>7天</th><th>失败</th></tr>' + items.map(x=>`<tr><td class="name">${esc(x.model)}</td><td class="path">${esc(x.host||'—')}</td><td>${x.today}</td><td>${x.count}</td><td>${x.fails?`<span style="color:var(--danger)">${x.fails}</span>`:'0'}</td></tr>`).join('') + '</table>' : '<div class="empty">该路线今日暂无记录</div>';
   }
   el.innerHTML = h;
 }
