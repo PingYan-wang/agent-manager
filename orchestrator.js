@@ -1,6 +1,6 @@
 // orchestrator.js — 跨 Agent 任务编排器（Loop + 子 Agent + 辩论 + 自动续步）
 // 由 server.js 挂载: initOrchestrator() 启动 tick; handleOrchestratorApi() 处理 /api/orchestrator/*
-import { readFile, writeFile, mkdir } from 'node:fs/promises';
+import { readFile, writeFile, mkdir, access } from 'node:fs/promises';
 import { spawn, execFile } from 'node:child_process';
 import os from 'node:os';
 import path from 'node:path';
@@ -41,25 +41,20 @@ const AGENT_WORKERS = {
     label: 'Codex',
     cmd: '/Applications/ChatGPT.app/Contents/Resources/codex-cli/CodexCLI.app/Contents/MacOS/codex',
     args: ['exec', '--skip-git-repo-check', '--sandbox', 'workspace-write', '{prompt}'],
-    note: '需 codex login；当前未登录不可用',
+    note: '认证走 ChatGPT App 会话（非 auth.json）；二进制存在即视为可用，运行时失败会记录在任务日志',
     authCheck: async () => {
-      // codex login 状态探测：auth.json 存在且非空
-      try {
-        const s = await readFile(`${HOME}/.codex/auth.json`, 'utf8');
-        return s.length > 50;
-      } catch { return false; }
+      // codex CLI 内嵌于 ChatGPT.app，认证由 App 会话管理，auth.json 不存在也能跑
+      try { await access(AGENT_WORKERS.codex.cmd); return true; } catch { return false; }
     },
   },
   devin: {
     label: 'Devin',
     cmd: '/Applications/Devin.app/Contents/Resources/app/extensions/windsurf/devin/bin/devin',
     args: ['-p', '--permission-mode', 'accept-edits', '--', '{prompt}'],
-    note: '需 devin auth login；当前未登录不可用',
+    note: '认证走 Devin App 会话；二进制存在即视为可用，运行时失败会记录在任务日志',
     authCheck: async () => {
-      try {
-        const c = JSON.parse(await readFile(`${HOME}/.config/devin/config.json`, 'utf8'));
-        return !!(c.apiKey || c.api_key || c.token);
-      } catch { return false; }
+      // devin CLI 内嵌于 Devin.app，认证由 App 管理，config.json 无 token 也能跑
+      try { await access(AGENT_WORKERS.devin.cmd); return true; } catch { return false; }
     },
   },
 };

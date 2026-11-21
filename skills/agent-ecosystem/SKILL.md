@@ -14,7 +14,7 @@ description: 本机 Agent 生态系统的统一能力入口。当用户提到其
 - 工具来源覆盖：WorkBuddy 连接器（腾讯文档 240 工具、ima-mcp 9 工具、lighthouse-ops 60 工具等）、Codex、以及任何 Agent 里新装的 MCP——**装好即自动同步进网关**（文件变更约 3 秒内生效）
 - **网关已包含的能力不要重复安装**：例如 ima、腾讯文档、lighthouse 在网关里已 connected，可直接用 `mcp__mcphub__workbuddy_*` 系列工具。用户要求"使用 ima/腾讯文档"时先查网关工具，别去 `hermes mcp add` 或装第三方同名 MCP
 - stdio 类 MCP 冷启动注意：uvx/uv 系 server 首次运行要下载依赖，易超时；优先复用已 connected 的网关服务
-- 查 MCP 状态/工具列表：网关服务目录 `~/davinproject/agent-manager/gateway-catalog.md`（名称/状态/工具数，随网关变更自动更新）；或打开 http://localhost:3100 →「MCP 服务」页
+- 查 MCP 状态/工具列表：网关服务目录 `~/.agent-manager/gateway-catalog.md`（名称/状态/工具数，随网关变更自动更新）；或打开 http://localhost:3100 →「MCP 服务」页
 - 不确定某能力是否已接入时，**先读 gateway-catalog.md 再决定是否安装**——网关里大概率已有（如 ima、腾讯文档、lighthouse）
 - 某个 MCP 工具"找不到"时：先确认它是否在网关中 connected，再考虑让用户重启 Agent 会话刷新工具列表
 
@@ -45,6 +45,8 @@ description: 本机 Agent 生态系统的统一能力入口。当用户提到其
 - 完成有沉淀价值的任务后 → `memory_save` 写一条笔记（标题+结论+标签）；之后任何 Agent 都能 `memory_search` 找到，实现跨 Agent/跨会话的记忆继承
 
 共享记忆库：`~/.agent-manager/memory.jsonl`（追加写，按 agent/tag 可过滤）。注意控制写入频率，只存值得长期复用的结论，不要把过程日志当记忆写。
+
+数据覆盖：hermes/devin/codex 有完整会话内容（codex 读 `~/.codex/sessions` 的 rollout 文件）；workbuddy 只有任务元数据；claude/cursor/windsurf/gemini 无本地会话存储。
 
 ## 4. 任务编排器（长程任务 / 子 Agent）
 

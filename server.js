@@ -4,7 +4,7 @@
 import http from 'node:http';
 import https from 'node:https';
 import { execFile, spawn } from 'node:child_process';
-import { readFile, readdir, stat, mkdir, symlink, realpath, lstat, writeFile } from 'node:fs/promises';
+import { readFile, readdir, stat, mkdir, symlink, realpath, lstat, writeFile, unlink } from 'node:fs/promises';
 import { watch } from 'node:fs';
 import { initOrchestrator, handleOrchestratorApi } from './orchestrator.js';
 import { config, HOME, DATA_DIR } from './config.js';
@@ -461,9 +461,13 @@ async function syncAllSkills() {
     for (const s of sources) {
       const dest = path.join(dir, s.name);
       try {
-        await lstat(dest);
-        skipped.push(`${s.name} → ${dir} (已存在)`);
-        continue;
+        const st = await lstat(dest);
+        // 失效软链（源被删/移动）视为不存在，删除后重建
+        if (!(st.isSymbolicLink() && !(await exists(dest)))) {
+          skipped.push(`${s.name} → ${dir} (已存在)`);
+          continue;
+        }
+        await unlink(dest);
       } catch { /* 不存在，继续 */ }
       try {
         await symlink(s.path, dest, 'dir');

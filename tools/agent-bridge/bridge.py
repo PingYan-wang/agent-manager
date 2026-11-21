@@ -72,7 +72,51 @@ def devin_read(cid, max_chars):
         return None
     return _truncate(f.read_text(errors="replace"), max_chars)
 
+CODEX_SESSIONS = HOME / ".codex" / "sessions"
+
+def _codex_rollouts():
+    return sorted(glob.glob(str(CODEX_SESSIONS / "**" / "rollout-*.jsonl"), recursive=True),
+                  key=lambda p: os.path.getmtime(p), reverse=True)
+
+def _codex_meta(path, max_lines=60):
+    """读 rollout 前 N 行，提取 session_meta 与首条 user 消息作标题。"""
+    meta, title = {}, ""
+    try:
+        with open(path, errors="replace") as fh:
+            for i, line in enumerate(fh):
+                if i >= max_lines:
+                    break
+                try:
+                    obj = json.loads(line)
+                except Exception:
+                    continue
+                p = obj.get("payload") or {}
+                if obj.get("type") == "session_meta" and not meta:
+                    meta = p
+                if p.get("type") == "message" and p.get("role") == "user" and not title:
+                    for c in p.get("content") or []:
+                        t = c.get("text") or ""
+                        if t and not t.startswith("<"):
+                            title = t.strip().replace("\n", " ")[:80]
+                            break
+                if meta and title:
+                    break
+    except Exception:
+        pass
+    return meta, title
+
 def codex_list(limit):
+    res = []
+    # 优先 rollout 文件（真实会话），state_5.sqlite threads 表可能为空
+    for f in _codex_rollouts()[:limit * 2]:
+        if len(res) >= limit:
+            break
+        meta, title = _codex_meta(f)
+        sid = meta.get("session_id") or meta.get("id") or Path(f).stem
+        res.append({"id": sid, "title": title or sid[:24], "file": f,
+                    "cwd": meta.get("cwd"), "mtime": os.path.getmtime(f)})
+    if res:
+        return res
     p = HOME / ".codex/state_5.sqlite"
     if not p.exists():
         return []
@@ -86,36 +130,53 @@ def codex_list(limit):
     db.close()
     return [{"id": r[0], "title": (r[1] or r[0])[:80], "created_at": r[2], "updated_at": r[3], "model": r[4]} for r in rows]
 
-def codex_read(cid, max_chars):
-    p = HOME / ".codex/state_5.sqlite"
-    if not p.exists():
-        return None
-    db = _ro_db(p)
+def _codex_read_rollout(path, max_chars):
+    out = []
     try:
-        row = db.execute("select rollout_path, title, preview from threads where id=?", (cid,)).fetchone()
-    except sqlite3.Error:
-        row = None
-    db.close()
-    if not row:
-        return None
-    rollout, title, preview = row
-    out = [f"# codex thread {cid}\n{title or ''}\n\n"]
-    rp = Path(rollout) if rollout else None
-    if rp and rp.exists():
-        # rollout jsonl: 逐行提取 payload 文本
-        try:
-            for line in rp.read_text(errors="replace").splitlines():
+        with open(path, errors="replace") as fh:
+            for line in fh:
                 try:
                     obj = json.loads(line)
                 except Exception:
                     continue
-                s = json.dumps(obj, ensure_ascii=False)
-                out.append(s[:2000] + "\n")
-        except Exception as e:
-            out.append(f"[rollout read error: {e}]")
-    else:
-        out.append(f"[无 rollout 文件; preview: {preview or ''}]")
-    return _truncate("".join(out), max_chars)
+                p = obj.get("payload") or {}
+                if p.get("type") != "message" or p.get("role") not in ("user", "assistant"):
+                    continue
+                texts = [c.get("text", "") for c in p.get("content") or [] if isinstance(c, dict)]
+                body = "\n".join(t for t in texts if t).strip()
+                if not body:
+                    continue
+                out.append(f"\n=== {p['role']} ===\n{body[:4000]}")
+    except Exception as e:
+        return f"[rollout read error: {e}]"
+    return _truncate("".join(out) or "[无消息内容]", max_chars)
+
+def codex_read(cid, max_chars):
+    # rollout 文件名含 session_id；按 id 匹配文件名或 session_meta
+    for f in _codex_rollouts():
+        if cid in f:
+            return _codex_read_rollout(f, max_chars)
+    # threads 表回退
+    p = HOME / ".codex/state_5.sqlite"
+    if p.exists():
+        db = _ro_db(p)
+        try:
+            row = db.execute("select rollout_path, title, preview from threads where id=?", (cid,)).fetchone()
+        except sqlite3.Error:
+            row = None
+        db.close()
+        if row:
+            rollout, title, preview = row
+            rp = Path(rollout) if rollout else None
+            if rp and rp.exists():
+                return _codex_read_rollout(str(rp), max_chars)
+            return _truncate(f"# codex thread {cid}\n{title or ''}\n\n[无 rollout 文件; preview: {preview or ''}]", max_chars)
+    # session_id 形式的 id：在所有 rollout 的 meta 中找
+    for f in _codex_rollouts()[:200]:
+        meta, _ = _codex_meta(f, max_lines=5)
+        if (meta.get("session_id") or meta.get("id")) == cid:
+            return _codex_read_rollout(f, max_chars)
+    return None
 
 def workbuddy_list(limit):
     res = []
@@ -195,6 +256,23 @@ def devin_search(query, limit):
     return res
 
 def codex_search(query, limit):
+    res = []
+    q = query.lower()
+    for f in _codex_rollouts():
+        if len(res) >= limit:
+            break
+        try:
+            text = open(f, errors="replace").read()
+        except Exception:
+            continue
+        if q not in text.lower():
+            continue
+        meta, title = _codex_meta(f)
+        res.append({"id": meta.get("session_id") or meta.get("id") or Path(f).stem,
+                    "title": title or Path(f).stem[:24], "file": f,
+                    "snippet": _snippet(text, query), "mtime": os.path.getmtime(f)})
+    if res:
+        return res
     p = HOME / ".codex/state_5.sqlite"
     if not p.exists():
         return []
@@ -285,7 +363,7 @@ ADAPTERS = {
     "devin":     {"name": "Devin",     "list": devin_list,     "read": devin_read,
                   "note": "CLI 会话摘要/历史导出 (summaries/*.md)"},
     "codex":     {"name": "Codex",     "list": codex_list,     "read": codex_read,
-                  "note": "state_5.sqlite threads; 本机暂无记录时为空"},
+                  "note": "~/.codex/sessions/**/rollout-*.jsonl 会话文件（state_5.sqlite 为辅）"},
     "workbuddy": {"name": "WorkBuddy", "list": workbuddy_list, "read": workbuddy_read,
                   "note": "任务元数据(tasks/*.json)，非完整对话流"},
 }
