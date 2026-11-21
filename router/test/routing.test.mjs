@@ -87,6 +87,7 @@ fs.writeFileSync(path.join(tmp, 'config.json'), JSON.stringify({
     borrowSrc: { chain: [{ provider: 'pi', models: ['quota'] }] },
     borrowDst: { chain: [{ provider: 'ph', models: ['good-b'] }] },
     cheap: { strategy: 'cost', chain: [{ provider: 'pc2', models: ['good-a'] }, { provider: 'pc1', models: ['good-b'] }] },
+    verify: { chain: [{ provider: 'pq', models: ['quota', 'good-a'] }, { provider: 'pb', models: ['good-b'] }] },
   },
   reserve: [{ provider: 'plocal', models: ['qwen3b'] }],
 }, null, 2));
@@ -411,15 +412,18 @@ try {
   check('明确不可重试且无 Retry-After', /"retryable":false/.test(r19.text) && !r19.headers['retry-after'], JSON.stringify(r19.headers));
   check('不做任何上游尝试', c19.length === 0, JSON.stringify(c19.map((c) => c.model)));
 
-  // 20 已知且持续的故障：熔断已存在一段时间 → 直接 400，不再让客户端等下一轮
+  // 20 已知且持续的故障：熔断已存在一段时间 → 立刻 503 + Retry-After。
+  // 不能回 400：客户端（Hermes）把 400 判成 format_error / retryable=false，会整轮放弃重试，
+  // 冷却结束后恢复的兜底厂商永远轮不到。
   await resetCalls();
   await post2(ask('case20', 'dead'));
   await sleep(350);
   const t20 = Date.now();
   const r20 = await post2(ask('case20b', 'dead'));
-  check('已知故障快速失败 400', r20.status === 400 && Date.now() - t20 < 600, `status=${r20.status} ${Date.now() - t20}ms`);
+  check('已知故障快速失败 503', r20.status === 503 && Date.now() - t20 < 600, `status=${r20.status} ${Date.now() - t20}ms`);
   check('归因为 router_cooling', /router_cooling/.test(r20.text), r20.text.slice(0, 240));
-  check('冷却期不给 Retry-After', !r20.headers['retry-after'], JSON.stringify(r20.headers));
+  check('可重试并带 Retry-After', /"retryable":true/.test(r20.text) && !!r20.headers['retry-after'], `${JSON.stringify(r20.headers)} ${r20.text.slice(0, 200)}`);
+  check('不再声称 formaturile/不可重试', !/— not retrying/.test(r20.text), r20.text.slice(0, 200));
 
   // 21 路由策略来自配置：strategy=cost 时同一档内按成本重排
   const planCheap = await (await fetch(`${base}/admin/plan?route=cheap`)).json();
@@ -427,6 +431,47 @@ try {
   check('低成本厂商排到最前', planCheap.steps[0] && planCheap.steps[0].provider === 'pc1', JSON.stringify(planCheap.steps));
   const planDefault = await (await fetch(`${base}/admin/plan?route=simple`)).json();
   check('未配置策略时保持配置顺序', planDefault.strategy === 'priority' && planDefault.steps[0].provider === 'pa', JSON.stringify(planDefault.steps));
+
+  // 21b 链路验证：逐模型最小调用，厂商级失败后跳过同厂商剩余模型但继续下一家
+  await resetCalls();
+  const verifyRes = await fetch(`${base}/admin/verify`, {
+    method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ route: 'verify', timeoutMs: 4000 }),
+  });
+  const verify = await verifyRes.json();
+  check('链路验证逐模型执行', verifyRes.status === 200 && verify.summary.total >= 3, JSON.stringify(verify).slice(0, 300));
+  check('厂商失败后续模型跳过', verify.steps[0]?.status === 'failed' && verify.steps[0]?.kind === 'quota' && verify.steps[1]?.status === 'skipped', JSON.stringify(verify.steps));
+  check('后续厂商继续验证', verify.steps[2]?.status === 'ok' && verify.summary.firstUsable?.provider === 'pb', JSON.stringify(verify.summary));
+  const verifyCalls = await calls();
+  check('验证不浪费同厂商调用', verifyCalls.map((c) => c.model).join(',') === 'quota,good-b', JSON.stringify(verifyCalls));
+  check('验证遵守能力守卫', verify.steps.some((s) => s.status === 'skipped' && s.kind === 'capability'), JSON.stringify(verify.steps));
+  const verifyHealth = await (await fetch(`${base}/admin/health`)).json();
+  check('验证回写熔断状态', verifyHealth.providers.find((p) => p.id === 'pq')?.open === true, JSON.stringify(verifyHealth.providers.find((p) => p.id === 'pq')));
+
+  // 文件编辑和原子替换都应直接更新运行中的策略；无效 JSON 不得破坏旧策略。
+  const configPath = path.join(tmp, 'config.json');
+  const editedConfig = JSON.parse(fs.readFileSync(configPath, 'utf8'));
+  editedConfig.routes.simple.chain.reverse();
+  fs.writeFileSync(configPath, JSON.stringify(editedConfig));
+  let livePlan;
+  for (let i = 0; i < 30; i++) {
+    livePlan = await (await fetch(`${base}/admin/plan?route=simple`)).json();
+    if (livePlan.steps[0]?.provider === 'pb') break;
+    await sleep(100);
+  }
+  check('直接编辑配置自动更新实时链路', livePlan.steps[0]?.provider === 'pb', JSON.stringify(livePlan.steps));
+  fs.writeFileSync(configPath, '{broken');
+  await sleep(350);
+  livePlan = await (await fetch(`${base}/admin/plan?route=simple`)).json();
+  check('无效配置保留上一个可用策略', livePlan.steps[0]?.provider === 'pb', JSON.stringify(livePlan.steps));
+  const restoredConfig = { ...editedConfig, routes: { ...editedConfig.routes, simple: { chain: [...editedConfig.routes.simple.chain].reverse() } } };
+  fs.writeFileSync(`${configPath}.new`, JSON.stringify(restoredConfig));
+  fs.renameSync(`${configPath}.new`, configPath);
+  for (let i = 0; i < 30; i++) {
+    livePlan = await (await fetch(`${base}/admin/plan?route=simple`)).json();
+    if (livePlan.steps[0]?.provider === 'pa') break;
+    await sleep(100);
+  }
+  check('原子替换配置自动更新实时链路', livePlan.steps[0]?.provider === 'pa', JSON.stringify(livePlan.steps));
 
   // 22 升级档位跟随配置，不因新增路由被改写
   const h22 = await (await fetch(`${base}/admin/health`)).json();
@@ -445,6 +490,43 @@ try {
   const timeoutCalls = await calls();
   check('流中超时明确失败且不重放', timedOut && /state=upstream_timeout/.test(log.slice(logAt)) && timeoutCalls.length === 1, log.slice(logAt));
   check('无内容超时首内容计时为空', /first=- state=upstream_timeout/.test(log.slice(logAt)), log.slice(logAt));
+
+  const autoConfig = JSON.parse(fs.readFileSync(configPath, 'utf8'));
+  for (const tier of ['simple', 'coding', 'complex', 'expert']) {
+    const provider = `tier-${tier}`;
+    autoConfig.providers[provider] = { baseUrl: `${mockBase}/v1`, apiKey: provider };
+    autoConfig.routes[tier] = { strategy: 'priority', chain: [{ provider, models: ['good-a'] }] };
+  }
+  autoConfig.providers['tier-classifier'] = { baseUrl: `${mockBase}/v1`, apiKey: 'classifier' };
+  autoConfig.routes.classifier = { chain: [{ provider: 'tier-classifier', models: ['tier-classifier'] }] };
+  autoConfig.classifier = { mode: 'cloud', route: 'classifier' };
+  autoConfig.reserve = [];
+  fs.writeFileSync(configPath, JSON.stringify(autoConfig));
+  await fetch(`${base}/admin/reload`, { method: 'POST' });
+  for (const [text, expected] of [
+    ['你好，普通问答 #TIER=SIMPLE', 'simple'],
+    ['请解释 PDF 是什么 #TIER=SIMPLE', 'simple'],
+    ['讲讲 PDF 格式的原理 #TIER=SIMPLE', 'simple'],
+    ['帮我查一下今天天气 #TIER=SIMPLE', 'simple'],
+    ['请解释并生成一份 PDF 文件 #TIER=SIMPLE', 'coding'],
+    ['写一个排序函数 #TIER=CODING', 'coding'],
+    ['规划项目任务并拆解步骤 #TIER=CODING', 'complex'],
+    ['请验收已完成的代码 #TIER=CODING', 'complex'],
+    ['请攻克这个高难度数学难题 #TIER=COMPLEX', 'expert'],
+    ['解释量子纠缠 #TIER=EXPERT', 'expert'],
+    ['帮我截图 #TIER=SIMPLE', 'coding'],
+  ]) {
+    const response = await post(ask(text, 'auto', { stream: false }));
+    check(`auto 分类 ${expected}: ${text}`, response.status === 200 && response.headers['x-router-provider'] === `tier-${expected}`, JSON.stringify(response.headers));
+  }
+  const withTools = await post(ask('你好，普通问答 #TIER=SIMPLE', 'auto', { stream: false, tools: [{ type: 'function', function: { name: 'test', parameters: {} } }] }));
+  check('auto 有工具时不使用 simple', withTools.headers['x-router-provider'] === 'tier-coding', JSON.stringify(withTools.headers));
+
+  autoConfig.routes.classifier.chain[0].models = ['tier-classifier-expert'];
+  fs.writeFileSync(configPath, JSON.stringify(autoConfig));
+  await fetch(`${base}/admin/reload`, { method: 'POST' });
+  const afterReload = await post(ask('你好，普通问答 #TIER=SIMPLE', 'auto', { stream: false }));
+  check('配置热重载后 auto 重新分类旧请求', afterReload.headers['x-router-provider'] === 'tier-expert', JSON.stringify(afterReload.headers));
   check('临时配置目录包含独立配置', fs.existsSync(path.join(tmp, 'config.json')) && !fs.existsSync(path.join(tmp, 'router.log')), tmp);
 } catch (e) {
   check('测试执行', false, String((e && e.stack) || e));

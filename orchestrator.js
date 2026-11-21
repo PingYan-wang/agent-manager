@@ -1,6 +1,7 @@
 // orchestrator.js — 跨 Agent 任务编排器（Loop + 子 Agent + 辩论 + 自动续步）
 // 由 server.js 挂载: initOrchestrator() 启动 tick; handleOrchestratorApi() 处理 /api/orchestrator/*
 import { readFile, writeFile, mkdir, access, rename, unlink } from 'node:fs/promises';
+import { existsSync, readdirSync } from 'node:fs';
 import { spawn } from 'node:child_process';
 import { randomUUID } from 'node:crypto';
 import os from 'node:os';
@@ -30,14 +31,38 @@ const DEFAULT_CONFIG = {
   },
 };
 
+// Hermes CLI 的 shebang 是 `#!/usr/bin/env python3`，在 macOS 自带的 python 3.9 下会因
+// `str | None` 语法直接崩溃（TypeError: unsupported operand type(s) for |）。必须显式用
+// 装了依赖的 venv python 启动，否则派发给 Hermes 的子任务全部瞬间失败。
+function resolveHermesPython() {
+  const cands = [];
+  const installs = path.join(HOME, '.hermes', 'installs');
+  try {
+    for (const a of readdirSync(installs)) {
+      const envs = path.join(installs, a, 'environments');
+      let names = [];
+      try { names = readdirSync(envs); } catch { continue; }
+      for (const b of names) {
+        cands.push(path.join(envs, b, 'venv', 'bin', 'python3'));
+        cands.push(path.join(envs, b, 'venv', 'bin', 'python'));
+      }
+    }
+  } catch { /* 没有 installs 目录就走下面的兜底 */ }
+  cands.push(path.join(HOME, '.hermes', 'hermes-agent', 'venv', 'bin', 'python3'));
+  for (const p of cands) if (existsSync(p)) return p;
+  return 'python3';
+}
+const HERMES_PYTHON = resolveHermesPython();
+const HERMES_CLI = path.join(HOME, '.hermes', 'hermes-agent', 'hermes');
+
 // worker 适配器：{prompt} 占位符替换为任务提示词；available() 探测是否可用
 const AGENT_WORKERS = {
   hermes: {
     label: 'Hermes',
-    cmd: `${HOME}/.hermes/hermes-agent/hermes`,
-    args: ['-z', '{prompt}'],
+    cmd: HERMES_PYTHON,
+    args: [HERMES_CLI, '-z', '{prompt}'],
     always: true,
-    note: 'hermes -z 无头模式，本地路由',
+    note: 'venv python + hermes -z 无头模式，本地路由',
   },
   codex: {
     label: 'Codex',
@@ -104,6 +129,7 @@ async function load() {
   for (const task of loaded.tasks) {
     if (!task || typeof task.id !== 'string' || !Array.isArray(task.plan) || (task.tree !== undefined && !Array.isArray(task.tree))) throw new Error('编排器任务状态损坏');
     if (task.plan.length) validateSteps(task.plan);
+    migrateTaskTree(task);
   }
   state = { ...state, ...loaded };
   state.config = { ...structuredClone(DEFAULT_CONFIG), ...state.config };
@@ -138,6 +164,7 @@ function log(task, level, msg) {
   dirty = true;
 }
 const findTask = (id) => state.tasks.find((t) => t.id === id);
+const BEARER = (key) => `Bearer ${key}`;
 
 // ---------- 子 Agent 池 + 执行树 + 失败自愈 ----------
 function classifyFail(text) {
@@ -173,6 +200,28 @@ function recoveryCandidates(client) {
     for (const c of allowedAgents()) if (c !== client) { out.push(c); break; }
   }
   return out;
+}
+
+// 兼容旧数据：旧任务只有 plan 没有 tree，按 plan 重建 goal/plan/step 节点
+function migrateTaskTree(task) {
+  if (Array.isArray(task.tree) && task.tree.length) return;
+  task.tree = [];
+  const goal = { id: 'n1', kind: 'goal', label: String(task.goal || '').slice(0, 80),
+    status: task.status === 'done' ? 'done' : task.status === 'blocked' ? 'failed' : 'pending',
+    ts: task.createdAt || Date.now(), endTs: task.status === 'done' ? (task.updatedAt || Date.now()) : undefined };
+  task.tree.push(goal);
+  if (!task.plan || !task.plan.length) { dirty = true; return; }
+  const plan = { id: 'n2', kind: 'plan', label: '执行计划', parentId: goal.id,
+    status: task.status === 'done' ? 'done' : 'pending', ts: task.createdAt || Date.now() };
+  task.tree.push(plan);
+  for (const s of task.plan) {
+    task.tree.push({ id: `step_${s.id}`, kind: 'step', parentId: plan.id,
+      label: `${s.id} ${s.title || ''}`.trim(), agent: s.agent, status: s.status || 'pending',
+      ts: s.startedAt || task.createdAt || Date.now(), endTs: s.endedAt || undefined,
+      stepId: s.id, deps: s.deps || [], depth: s.depth || 0, needsDebate: !!s.needsDebate,
+      progress: s.status === 'done' ? 100 : 0, detail: s.result ? String(s.result).slice(0, 200) : undefined });
+  }
+  dirty = true;
 }
 
 // 执行树节点
@@ -383,14 +432,40 @@ async function plannerChat(task, userPrompt, execution, actions) {
   const cancel = () => controller.abort();
   execution.controller.signal.addEventListener('abort', cancel, { once: true });
   const timer = setTimeout(cancel, 120000);
+  const PLANNER_RETRIES = 3;
   try {
-    const res = await runtime.fetch(`${p.baseUrl}/chat/completions`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${p.apiKey}` },
-      body: JSON.stringify(body), signal: controller.signal,
-    });
+    let res, lastErr;
+    for (let attempt = 0; attempt < PLANNER_RETRIES; attempt++) {
+      check();
+      try {
+        res = await runtime.fetch(`${p.baseUrl}/chat/completions`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json', Authorization: BEARER(p.apiKey) },
+          body: JSON.stringify(body), signal: controller.signal,
+        });
+        if (res.status === 429 || res.status >= 500) {
+          lastErr = new Error(`planner HTTP ${res.status}`);
+          const retryAfter = Number(res.headers?.get?.('retry-after'));
+          const wait = Number.isFinite(retryAfter) && retryAfter > 0 ? retryAfter * 1000 : 500 * (attempt + 1);
+          log(task, 'warn', `planner ${res.status}，${wait}ms 后重试 (${attempt + 1}/${PLANNER_RETRIES})`);
+          await new Promise((r) => setTimeout(r, wait));
+          continue;
+        }
+        if (!res.ok) throw new Error(`planner HTTP ${res.status}`);
+        lastErr = null;
+        break;
+      } catch (error) {
+        if (error.name === 'AbortError' || error instanceof Cancelled) throw error;
+        lastErr = error;
+        if (attempt < PLANNER_RETRIES - 1) {
+          log(task, 'warn', `planner ${error.message}，${500 * (attempt + 1)}ms 后重试 (${attempt + 1}/${PLANNER_RETRIES})`);
+          await new Promise((r) => setTimeout(r, 500 * (attempt + 1)));
+          continue;
+        }
+      }
+    }
     check();
-    if (!res.ok) throw new Error(`planner HTTP ${res.status}`);
+    if (lastErr) throw lastErr;
     const j = await res.json();
     check();
     const text = j.choices?.[0]?.message?.content;

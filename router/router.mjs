@@ -37,8 +37,10 @@ const CFG_FILE = process.env.ROUTER_CONFIG ? path.resolve(process.env.ROUTER_CON
 const STATE_DIR = path.dirname(CFG_FILE);
 const BREAKER_FILE = path.join(STATE_DIR, 'breaker-state.json');
 const ROUTER_VERSION = 2;
+const CONFIG_RELOAD_DEBOUNCE_MS = 150;
 
 let CFG = {};
+let lastConfigText = '';
 let PROVIDERS = {};   // pid -> { id, baseUrl, apiKey, label }
 let ROUTES = {};      // name -> { name, groups: [{ pid, models: [] }] }
 let RESERVE = [];     // [{ pid, models: [] }]
@@ -135,8 +137,10 @@ function normalizeConfig(cfg) {
 }
 
 function loadConfig() {
-  CFG = JSON.parse(fs.readFileSync(CFG_FILE, 'utf8'));
-  const n = normalizeConfig(CFG);
+  const text = fs.readFileSync(CFG_FILE, 'utf8');
+  const nextConfig = JSON.parse(text);
+  const n = normalizeConfig(nextConfig);
+  CFG = nextConfig;
   PROVIDERS = n.providers;
   ROUTES = n.routes;
   RESERVE = n.reserve;
@@ -172,8 +176,26 @@ function loadConfig() {
     fastFailStaleMs: g.fastFailStaleMs === 0 ? 0 : (Number(g.fastFailStaleMs) > 0 ? Number(g.fastFailStaleMs) : 45000),
     fastFailMinWaitMs: g.fastFailMinWaitMs === 0 ? 0 : (Number(g.fastFailMinWaitMs) > 0 ? Number(g.fastFailMinWaitMs) : 120000),
   };
+  lastConfigText = text;
 }
 loadConfig();
+let configReloadTimer;
+const configWatcher = fs.watch(STATE_DIR, (_event, filename) => {
+  if (filename && String(filename) !== path.basename(CFG_FILE)) return;
+  clearTimeout(configReloadTimer);
+  configReloadTimer = setTimeout(() => {
+    try {
+      if (fs.readFileSync(CFG_FILE, 'utf8') === lastConfigText) return;
+      loadConfig();
+      classifyCache.clear();
+      sessionRoutes.clear();
+      console.log(`[router] config changed routes=${Object.keys(ROUTES).join(',')} providers=${Object.keys(PROVIDERS).join(',')}`);
+    } catch (error) {
+      console.error('[router] config change not applied:', error.message);
+    }
+  }, CONFIG_RELOAD_DEBOUNCE_MS);
+});
+configWatcher.on('error', (error) => console.error('[router] config watcher failed:', error.message));
 
 // ---------------------------------------------------------------- 熔断（按厂商账号）
 let breakers = {};
@@ -271,10 +293,12 @@ function ledgerSet(key, val) {
 
 // ---------------------------------------------------------------- 分类器
 const CLASSIFY_PROMPT = `Classify the user's latest request into exactly one category:
-- CODING: writing, debugging, refactoring, running code, scripts, repo/file tasks, OR any task that needs operating the local computer — files, apps, reminders, notes, documents, media, automation, or MCP/skill tools
-- COMPLEX: architecture design, planning, task breakdown/计划/方案/规划, reviewing or accepting finished work (验收/评审), deep reasoning, multi-step analysis
-- SIMPLE: pure conversation — chat, questions, explanations answerable directly; weather, news, general knowledge, translations, brainstorming, or any question that does NOT ask to operate the local computer, files, apps, reminders, documents, media, automation, or MCP/skill tools
-Reply with exactly one word: CODING, COMPLEX, or SIMPLE.`;
+- EXPERT: exceptionally difficult problems, hard mathematical proofs, research-level reasoning or explicitly high-difficulty challenges; not routine planning or coding
+- COMPLEX: planning tasks, designing architecture, breaking down complex work, analysing multi-step problems, reviewing or accepting completed work (任务规划/复杂任务/验收)
+- CODING: ordinary programming, writing or debugging code, running scripts, or operating local files, apps and tools to perform a task
+- SIMPLE: simple or general questions, conversation, explanations, translations, weather, news and ordinary knowledge
+Classify the requested work, not a mere mention of a file or technology. Prefer SIMPLE for general questions, CODING for routine implementation, COMPLEX for planning or verification, and EXPERT only for genuinely hard problems.
+Reply with exactly one word: SIMPLE, CODING, COMPLEX, or EXPERT.`;
 
 const classifyCache = new Map();
 const CACHE_MAX = 1000;
@@ -337,15 +361,26 @@ const TOOL_INTENT = [
   /日历|日程/i,
   /自动化|定时任务|cron|workflow/i,
   /操作电脑|computer use/i,
-  /查一下|帮我查|搜索一下|搜一下|google一下|百度一下/i,
+  /搜索一下|google一下|百度一下/i,
 ];
 
-function toolIntentRoute(text) { return TOOL_INTENT.some((re) => re.test(text)) ? 'coding' : null; }
+function toolIntentRoute(text) {
+  const informational = /解释|介绍|什么是|为何|为什么|如何理解|讲讲|原理|是什么意思|用途|概念|what is|explain/i.test(text);
+  const alsoRequestsAction = /(?:并|再|然后|同时|顺便).{0,8}(?:生成|创建|制作|转换|发送|编辑|下载|上传|保存|运行|执行|提取|填写|总结|整理)/.test(text);
+  if (informational && !alsoRequestsAction) return null;
+  return TOOL_INTENT.some((re) => re.test(text)) ? 'coding' : null;
+}
+
+const EXPERT_INTENT = /高难度|难题|疑难问题|棘手问题|奥赛题|科研级|hard problem|expert.level|olympiad/i;
+const COMPLEX_INTENT = /任务规划|项目规划|架构设计|(?:任务|项目|系统|工作).{0,12}(?:规划|拆解)|规划.{0,12}(?:任务|项目|系统|步骤)|制定.{0,8}(?:计划|方案)|复杂.{0,6}(?:任务|问题)|验收|评审|review (?:the )?(?:work|results?)|plan (?:a |the )?(?:project|tasks?)/i;
+const CODING_INTENT = /(?:写|编写|实现|修改|调试|修复|重构|运行|执行).{0,16}(?:代码|函数|程序|脚本)|write (?:some |a )?code|debug|refactor|implement/i;
 
 async function classify(text) {
   const key = sha1(text.slice(0, 4000));
   if (classifyCache.has(key)) return classifyCache.get(key);
-  const forced = toolIntentRoute(text);
+  const forced = EXPERT_INTENT.test(text) ? 'expert'
+    : COMPLEX_INTENT.test(text) ? 'complex'
+      : CODING_INTENT.test(text) ? 'coding' : toolIntentRoute(text);
   if (forced) {
     if (classifyCache.size >= CACHE_MAX) classifyCache.clear();
     classifyCache.set(key, forced);
@@ -353,7 +388,7 @@ async function classify(text) {
   }
   let route = 'simple';
   const cc = CFG.classifier || {};
-  const mode = cc.mode || 'local';
+  const mode = cc.mode || 'cloud';
   try {
     let out = '';
     if (mode === 'cloud') {
@@ -419,7 +454,8 @@ async function classify(text) {
         out = String(data.message?.content || '').toUpperCase();
       }
     }
-    if (out.includes('COMPLEX')) route = 'complex';
+    if (out.includes('EXPERT')) route = 'expert';
+    else if (out.includes('COMPLEX')) route = 'complex';
     else if (out.includes('CODING')) route = 'coding';
     else route = 'simple';
   } catch {
@@ -760,14 +796,26 @@ function resolveSteps(plan, tried, log, ctx) {
     // 可能是空集：交给上层跨档借用有能力的厂商，而不是让不合适的模型硬答
     steps = capable;
   }
-  // 厂商熔断
+  // 厂商熔断：全部熔断时保留一个「半开探测」候选，避免整池冷却导致 400 快速失败
+  // （标准熔断器 half-open：长期余额/配额故障也可能在 reset 前恢复，必须留一条探针）
   const open = steps.filter((s) => !breakerOpen(s.pid));
   let allOpen = false;
   if (!open.length && steps.length) {
-    // 整个计划里的厂商都在熔断冷却中：直接快速失败，不再做无谓探测
-    allOpen = true;
-    log.push('skip=all-open');
-    steps = [];
+    const probe = steps.find((s) => {
+      const b = breakers[s.pid];
+      if (!b) return false;
+      const total = b.openUntil - Date.parse(b.updated || 0);
+      const elapsed = Date.now() - Date.parse(b.updated || 0);
+      return total > 0 && elapsed > total / 2;   // 冷却过半才允许探测
+    });
+    if (probe) {
+      steps = [probe];
+      log.push(`skip=all-open→probe(${probe.pid})`);
+    } else {
+      allOpen = true;
+      log.push('skip=all-open');
+      steps = [];
+    }
   } else {
     if (open.length !== steps.length) log.push(`skip=breaker(${steps.length - open.length})`);
     diag.breaker = steps.length - open.length;
@@ -778,6 +826,28 @@ function resolveSteps(plan, tried, log, ctx) {
 }
 
 // ---------------------------------------------------------------- 上游请求
+async function probeCompletion(prov, model, payload, timeoutMs) {
+  const ctrl = new AbortController();
+  const timer = setTimeout(() => ctrl.abort(), timeoutMs);
+  const started = Date.now();
+  try {
+    const upstream = await fetch(`${prov.baseUrl}/chat/completions`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json', authorization: `Bearer ${prov.apiKey}` },
+      body: JSON.stringify({ ...payload, model }),
+      signal: ctrl.signal,
+    });
+    const text = await upstream.text().catch(() => '');
+    let apiError = '';
+    try { apiError = JSON.parse(text)?.error ? String(JSON.parse(text).error.message || JSON.parse(text).error) : ''; } catch { /* SSE 或空响应也算上游 2xx */ }
+    return { ok: upstream.ok && !apiError, status: upstream.status, body: (apiError || text).slice(0, 1000), ms: Date.now() - started };
+  } catch (e) {
+    return { ok: false, status: 0, body: String((e && e.message) || e), ms: Date.now() - started };
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
 async function forwardOnce(prov, model, payload, res) {
   const ctrl = new AbortController();
   const onClose = () => { if (!res.writableFinished) ctrl.abort(); };
@@ -971,6 +1041,8 @@ const server = http.createServer(async (req, res) => {
     if (req.method === 'POST' && url.pathname === '/admin/reload') {
       try {
         loadConfig();
+        classifyCache.clear();
+        sessionRoutes.clear();
         console.log(`[router] config reloaded routes=${Object.keys(ROUTES).join(',')} providers=${Object.keys(PROVIDERS).join(',')}`);
         res.writeHead(200, { 'content-type': 'application/json' });
         res.end(JSON.stringify({ ok: true, routes: Object.keys(ROUTES), providers: Object.keys(PROVIDERS) }));
@@ -1005,6 +1077,140 @@ const server = http.createServer(async (req, res) => {
           .map((s) => ({ provider: s.pid, model: s.model, why: incapableReason(s.pid, ctx) || (breakerOpen(s.pid) ? 'breaker' : modelCooled(s.pid, s.model) ? 'cooling' : 'tried') })),
         diag: resolved.diag,
         notes: log,
+      }));
+      return;
+    }
+    if (req.method === 'POST' && url.pathname === '/admin/verify') {
+      const raw = await readBody(req).catch(() => Buffer.from('{}'));
+      let body = {};
+      try { body = JSON.parse(raw.toString('utf8') || '{}'); } catch { body = {}; }
+      const routeName = String(body.route || url.searchParams.get('route') || '').trim();
+      const route = ROUTES[routeName];
+      if (!route) {
+        res.writeHead(404, { 'content-type': 'application/json' });
+        res.end(JSON.stringify({ error: { message: `unknown route ${routeName}` } }));
+        return;
+      }
+      const timeoutMs = Math.min(Math.max(Number(body.timeoutMs) || 45000, 5000), 120000);
+      const totalTimeoutMs = Math.min(Math.max(Number(body.totalTimeoutMs) || 240000, 30000), 600000);
+      const probeBody = {
+        stream: !!body.stream,
+        max_tokens: 8,
+        messages: [{ role: 'user', content: '只回复 OK' }],
+      };
+      const toolCount = Math.max(0, Number(body.tools) || 0);
+      if (toolCount) {
+        probeBody.tools = [{ type: 'function', function: { name: 'router_verify', description: 'Router health probe', parameters: { type: 'object', properties: {} } } }];
+        probeBody.tool_choice = 'auto';
+      }
+      const ctx = requestContext(probeBody);
+      ctx.route = route.name;
+      const plan = planFor(route.name, 0, []);
+      const routeSteps = new Set();
+      for (const g of route.groups) for (const m of g.models) routeSteps.add(`${g.pid}|${m}`);
+      const planNotes = [];
+      const resolved = resolveSteps(plan, [], planNotes, ctx);
+      const started = Date.now();
+      const deadline = started + totalTimeoutMs;
+      const providerBlocked = new Map();
+      const server5xx = new Map();
+      const steps = [];
+      let timedOut = false;
+      for (const [index, step] of plan.steps.entries()) {
+        const prov = PROVIDERS[step.pid];
+        const item = {
+          index: index + 1,
+          provider: step.pid,
+          label: prov?.label || step.pid,
+          model: step.model,
+          origin: routeSteps.has(`${step.pid}|${step.model}`) ? 'route' : 'reserve',
+          pre: {
+            breaker: breakerOpen(step.pid) ? { kind: breakers[step.pid]?.kind || '', leftMs: breakerLeft(step.pid) } : null,
+            cooling: modelCooled(step.pid, step.model),
+          },
+        };
+        const skip = (kind, reason) => {
+          steps.push({ ...item, status: 'skipped', kind, reason });
+        };
+        const incapable = incapableReason(step.pid, ctx);
+        if (!prov) { skip('missing_provider', 'provider not configured'); continue; }
+        if (timedOut) { skip('timeout', `verification stopped after ${Math.round(totalTimeoutMs / 1000)}s`); continue; }
+        if (Date.now() >= deadline) { timedOut = true; skip('timeout', `verification stopped after ${Math.round(totalTimeoutMs / 1000)}s`); continue; }
+        if (providerBlocked.has(step.pid)) { skip('provider_failed', providerBlocked.get(step.pid)); continue; }
+        if (incapable) { skip('capability', incapable); continue; }
+        const host = hostOf(prov.baseUrl);
+        if (budgetExceeded(host)) {
+          providerBlocked.set(step.pid, 'daily budget exceeded');
+          skip('budget', host);
+          continue;
+        }
+        const leftMs = Math.max(1000, deadline - Date.now());
+        const r = await probeCompletion(prov, step.model, probeBody, Math.min(timeoutMs, leftMs));
+        const breakerAfter = () => {
+          const b = breakers[step.pid];
+          return b && b.openUntil > Date.now()
+            ? { open: true, kind: b.kind || '', leftMs: breakerLeft(step.pid), reason: String(b.reason || '').slice(0, 120) }
+            : { open: false };
+        };
+        if (r.ok) {
+          clearBreaker(step.pid);
+          noteStat(step.pid, step.model, r.ms, true);
+          steps.push({ ...item, status: 'ok', httpStatus: r.status, ms: r.ms, breaker: breakerAfter() });
+          continue;
+        }
+        const cls = classifyFailure(r.status, r.body);
+        noteStat(step.pid, step.model, r.ms, false);
+        noteFail({ ts: nowIso(), route: route.name, provider: step.pid, model: step.model, status: r.status, kind: cls.kind, scope: cls.scope, retry: 0, shape: 'verify', msg: String(r.body).replace(/\s+/g, ' ').slice(0, 240) });
+        let effectiveScope = cls.scope;
+        if (r.status >= 500) {
+          coolModel(step.pid, step.model);
+          effectiveScope = 'model';
+          const count = (server5xx.get(step.pid) || 0) + 1;
+          server5xx.set(step.pid, count);
+          if (count >= 2) {
+            trip(step.pid, { ...cls, text: r.body });
+            providerBlocked.set(step.pid, cls.kind);
+            effectiveScope = 'provider';
+          }
+        } else if (cls.scope === 'provider') {
+          trip(step.pid, { ...cls, text: r.body });
+          providerBlocked.set(step.pid, cls.kind);
+        } else if (cls.scope === 'model') {
+          coolModel(step.pid, step.model);
+        }
+        steps.push({
+          ...item,
+          status: 'failed',
+          httpStatus: r.status,
+          ms: r.ms,
+          kind: cls.kind,
+          scope: effectiveScope,
+          message: String(r.body).replace(/\s+/g, ' ').slice(0, 240),
+          breaker: breakerAfter(),
+        });
+      }
+      const okSteps = steps.filter((s) => s.status === 'ok');
+      const failedSteps = steps.filter((s) => s.status === 'failed');
+      const skippedSteps = steps.filter((s) => s.status === 'skipped');
+      const firstOk = okSteps[0] || null;
+      res.writeHead(200, { 'content-type': 'application/json' });
+      res.end(JSON.stringify({
+        ok: true,
+        route: route.name,
+        checkedAt: nowIso(),
+        durationMs: Date.now() - started,
+        ctx: { tools: toolCount, stream: !!body.stream },
+        summary: {
+          total: steps.length,
+          ok: okSteps.length,
+          failed: failedSteps.length,
+          skipped: skippedSteps.length,
+          providersOk: [...new Set(okSteps.map((s) => s.provider))],
+          firstUsable: firstOk ? { provider: firstOk.provider, model: firstOk.model, index: firstOk.index } : null,
+        },
+        diag: resolved.diag,
+        notes: planNotes,
+        steps,
       }));
       return;
     }
@@ -1259,18 +1465,25 @@ const server = http.createServer(async (req, res) => {
         return breakerOpen(p) && LONG_KINDS.has(b?.kind) && (Date.now() - Date.parse(b?.updated || 0)) >= GUARD.fastFailStaleMs;
       });
       const longOutageRetry = allCooling && hasStaleLongOutage && retryCount >= 1;
-      const fastFail = noCapable || staleOutage || longOutageRetry || retriedEnough || waitTooLong;
+      // fastFail 分两类：
+      //   noCapable：能力死局（没有模型能吃下这次请求），重试无意义 → 400
+      //   其余（冷却中 / 等太久 / 重试次数够多）：属于「暂时不可用」→ 503 + Retry-After。
+      //     绝不能回 400：客户端（Hermes）会把 400 判成 format_error、retryable=false，
+      //     整轮重试直接放弃，恢复后的兜底厂商永远轮不到。
+      const tempFastFail = staleOutage || longOutageRetry || retriedEnough || waitTooLong;
+      const fastFail = noCapable || tempFastFail;
       const allOpen = allCooling && !fastFail;
-      // 只有「请求本身不可解析」和能力/等待死局才回 400，让客户端别再空转；
-      // 其余全部失败一律 502/429，客户端会按服务器故障重试。
+      // 只有「请求本身不可解析」和能力死局才回 400，让客户端别再空转；
+      // 其余全部失败一律 503/502/429，客户端会按服务器故障重试。
       const reqFatal = !!(lastCls && lastCls.scope === 'request' && lastErr && lastErr.status === 400);
-      const head = fastFail ? 400
-        : allOpen || allCooling ? 503
+      const head = noCapable ? 400
+        : tempFastFail || allOpen || allCooling ? 503
           : reqFatal ? 400
             : lastErr && lastErr.status === 429 ? 429
               : 502;
       // 全熔断时按「最早恢复」估算，但至少 30 秒：避免被反复短熔断的厂商（网络型 30s）带着客户端空转
-      const retryAfterSec = (allOpen || allCooling) ? (lefts.length ? Math.max(30, Math.ceil(minLeft / 1000)) : 60) : 1;
+      const retryAfterSec = (allOpen || allCooling || tempFastFail)
+        ? (lefts.length ? Math.max(30, Math.ceil(minLeft / 1000)) : 60) : 1;
       const breakerView = Object.fromEntries(Object.keys(PROVIDERS).map((p) => {
         const b = breakers[p] || null;
         return [p, {
@@ -1288,21 +1501,26 @@ const server = http.createServer(async (req, res) => {
       console.log(`[router] ${nowIso()} route=${route} FAILALL head=${head} attempts=${attempts.length} allOpen=${allOpen} fastfail=${failKind || '-'} retry=${retryCount} last=${lastCls ? lastCls.kind : '-'} strategy=${plan.strategy || 'priority'} shape=[${shapeOf(basePayload)}] ${summary} dur=${Date.now() - t0}ms`);
       res.writeHead(head, {
         'content-type': 'application/json',
-        ...(retryAfterSec && !fastFail ? { 'retry-after': String(retryAfterSec) } : {}),
+        ...(retryAfterSec && (tempFastFail || !fastFail) ? { 'retry-after': String(retryAfterSec) } : {}),
         'x-router-reason': lastCls ? lastCls.kind : 'unknown',
-        ...(fastFail ? { 'x-router-retryable': '0', 'x-router-fail': failKind } : {}),
+        ...(fastFail ? { 'x-router-retryable': tempFastFail ? '1' : '0', 'x-router-fail': failKind } : {}),
+        ...(tempFastFail ? { 'retry-after': String(retryAfterSec) } : {}),
       });
       res.end(JSON.stringify({
         error: {
-          message: fastFail ? `router: ${why} — not retrying` : (allOpen || allCooling)
-            ? `router: all providers are cooling down for route ${route}; retry in ${retryAfterSec}s`
-            : `router: all candidates failed for route ${route}${plan.escalated ? ` (escalated to ${plan.escTo || 'reserve'})` : ''}`,
-          type: fastFail ? (noCapable ? 'router_no_capable_model' : 'router_cooling') : (allOpen || allCooling) ? 'router_all_open' : 'router_unavailable',
-          retryable: !fastFail,
-          retryAfterSec: fastFail ? 0 : retryAfterSec,
+          message: noCapable ? `router: ${why} — not retrying`
+            : tempFastFail ? `router: ${why}; retry in ${retryAfterSec}s`
+              : (allOpen || allCooling)
+                ? `router: all providers are cooling down for route ${route}; retry in ${retryAfterSec}s`
+                : `router: all candidates failed for route ${route}${plan.escalated ? ` (escalated to ${plan.escTo || 'reserve'})` : ''}`,
+          type: noCapable ? 'router_no_capable_model'
+            : tempFastFail || allOpen || allCooling ? 'router_cooling'
+              : 'router_unavailable',
+          retryable: !noCapable,
+          retryAfterSec: noCapable ? 0 : retryAfterSec,
           hint: noCapable
             ? '本地模型不支持这次请求（工具调用 / 上下文长度 / 档位），云端又不可用。换一个能做工具调用的厂商，或等云端恢复。'
-            : fastFail ? '云端账号都在熔断或额度用尽，重试同一个请求只会继续等；恢复后再发。' : '',
+            : tempFastFail ? '厂商在冷却/额度恢复中，router 会在恢复后自动接上；按 Retry-After 重试即可，不要当成请求格式错误。' : '',
           route, retry: retryCount, escalated: plan.escalated, strategy: plan.strategy || 'priority',
           shape: shapeOf(basePayload),
           attempts,
