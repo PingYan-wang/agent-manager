@@ -429,6 +429,7 @@ $('#modal').addEventListener('click', e => { if(e.target.id==='modal') closeModa
 document.querySelectorAll('nav button').forEach(b => b.onclick = () => {
   document.querySelectorAll('nav button').forEach(x=>x.classList.remove('active'));
   b.classList.add('active');
+  history.replaceState(null,'','#'+b.dataset.tab);
   ['agents','mcp','skills','orch','router','proxy'].forEach(t => $('#tab-'+t).style.display = t===b.dataset.tab?'':'none');
   if(b.dataset.tab==='agents') loadAgents();
   if(b.dataset.tab==='mcp'){ setSub('mcp','main'); loadServers(); }
@@ -437,6 +438,12 @@ document.querySelectorAll('nav button').forEach(b => b.onclick = () => {
   if(b.dataset.tab==='router') loadRouter();
   if(b.dataset.tab==='proxy') loadProxy();
 });
+// 标签页 hash 深链：/#router 等直达指定页（便于分享与测试）
+(function(){
+  const t = location.hash.replace('#','');
+  const btn = document.querySelector(`nav button[data-tab="${t}"]`);
+  if(btn && !btn.classList.contains('active')) btn.onclick();
+})();
 
 // ---------- 页内子标签（市场嵌入） ----------
 function setSub(kind, view){

@@ -4,28 +4,30 @@
 
 <h1 align="center">Agent Manager</h1>
 
-<p align="center"><b>本机多 Agent 统一管理 + LLM 智能路由网关</b>（macOS · 中文 Web UI · 零依赖 Node.js）</p>
+<p align="center"><b>本机多 Agent 统一管理 + LLM 智能路由网关 + MCP/Skill 生态同步</b>（macOS · 中文 Web UI · 零依赖 Node.js）</p>
 
 <p align="center">
   <img src="https://img.shields.io/badge/license-MIT-blue" alt="license"/>
   <img src="https://img.shields.io/badge/node-%E2%89%A518-brightgreen" alt="node"/>
   <img src="https://img.shields.io/badge/platform-macOS-lightgrey" alt="platform"/>
   <img src="https://img.shields.io/badge/UI-%E4%B8%AD%E6%96%87-red" alt="ui"/>
+  <img src="https://img.shields.io/badge/MCP-%E7%BD%91%E5%85%B3-orange" alt="mcp"/>
+  <img src="https://img.shields.io/badge/Skill-%E5%90%8C%E6%AD%A5-purple" alt="skill"/>
 </p>
 
 <table>
 <tr><td align="center" width="25%">
-<b>🧭 智能路由</b><br/>按任务分级分流，简单走便宜模型，复杂才上旗舰
+<b>🧭 智能路由</b><br/>LLM 分级分流，简单走便宜模型，复杂才上旗舰
 </td><td align="center" width="25%">
 <b>🔀 统一反代</b><br/>一个入口聚合所有 Agent 与 LLM 上游，SSE 流式透传
 </td><td align="center" width="25%">
-<b>🎼 任务编排</b><br/>拆解→子 Agent 执行→验收返工→人工裁决→自动续步
+<b>🎼 任务编排</b><br/>拆解→子 Agent 执行→验收返工→人工裁决→自动续步 loop
 </td><td align="center" width="25%">
 <b>💰 成本可控</b><br/>预算熔断 + 用量下钻 + 每日巡检日报，花费全透明
 </td></tr>
 </table>
 
-> 一句话：让你电脑上所有 AI Agent（Hermes / WorkBuddy / Codex / Devin / Windsurf / Claude …）共用一套 MCP、Skill 和模型路由——**简单问题走便宜模型，复杂任务才上贵模型，每一分钱花在刀刃上**。
+> 一句话：让你电脑上所有 AI Agent（Hermes / WorkBuddy / Codex / Devin / Windsurf / Claude …）共用一套 **MCP 工具、Skill 技能库和 LLM 智能路由**——**简单问题走便宜模型，复杂任务才上贵模型，每一分钱花在刀刃上**。
 
 ---
 
@@ -39,62 +41,71 @@
 
 Agent Manager 用一个本地 Web 面板把这些全部收拢：
 
-
 ![Agent Manager 架构图](docs/assets/architecture.png)
-
 
 ---
 
 ## 核心功能
 
-### 🧭 自动路由（本项目的招牌）
+### 🧭 LLM 智能路由（本项目的招牌）
 
 一个 OpenAI 兼容的本地代理（默认 `127.0.0.1:8788`），每个请求先由**分类器**判断任务等级，再路由到对应上游：
 
 | 路由 | 适用场景 | 默认模型 | 成本 |
 |---|---|---|---|
-| `simple` | 闲聊、问答、翻译、天气新闻 | deepseek-v4.1-flash（火山） | 极低 |
-| `coding` | 写代码、跑命令、文件操作、MCP 工具调用 | kimi-k3.1-pro（火山 Coding Plan 包月） | 包月内免费 |
-| `complex` | 架构设计、复杂分析、规划 | claude-opus-5-5（Reverix 按量） | 按量 |
+| `simple` | 闲聊、问答、翻译、天气新闻 | deepseek-v4.1-flash | 极低 |
+| `coding` | 写代码、跑命令、文件操作、MCP 工具调用 | kimi-k3.1-pro | 订阅额度内 |
+| `complex` | 架构设计、复杂分析、规划 | claude-opus-5-5 | 按量 |
 | `expert` | 手动指定的最高难度任务 | claude-fable-5-2 | 按量 |
+
+<p align="center"><img src="docs/screenshots/router.png" width="760" alt="自动路由面板"/></p>
 
 - **分类器双模式**：云端小模型（默认，复用已有上游，零部署）或本地 Ollama 小模型（UI 一键下载 `ollama pull`，完全离线）
 - **会话粘性**：同一会话内的追问（"继续/好的/ok…"）不降级，保持同一模型，保住 prompt 缓存、不丢上下文
 - **工具意图关键词覆盖**：提醒/邮件/PDF/截图等任务直接确定性路由到 coding，不依赖分类器猜
 - **多级 fallback**：主模型失败自动依次尝试备选链，可跨上游混合
-- **预算熔断**：按上游 host 设置每日预算（USD 或请求数），超限自动跳过走兜底——**Reverix 按量计费永不失控**
+- **预算熔断**：按上游 host 设置每日预算（USD 或请求数），超限自动跳过走兜底——**按量计费上游永不失控**
 - **热重载**：Web UI 改配置即时生效，无需重启；API Key 脱敏显示、留空不覆盖
 - **Agent 一键接入**：一键把 Hermes 等 Agent 切到 `model=auto`，其他 Agent 填统一入口即可；总开关可关
 
-### 🔀 反向代理
+### 🔀 反向代理 / 统一入口
 
 内置 `/px/<id>/` 前缀反代（HTTP + WebSocket，SSE 流式透传）：
+
+<p align="center"><img src="docs/screenshots/proxy.png" width="760" alt="反代面板"/></p>
 
 - 一键代理本机所有 Agent 服务（hermes / mcphub / ollama / 任意端口），增删改、启停、健康探测、端口扫描
 - **LLM 路由联动**：`http://127.0.0.1:3100/px/router/v1` 是所有 Agent 共用的模型入口，请求自动走智能路由——任何支持 OpenAI 兼容接口的工具改这一个地址即可
 
-### 🎼 任务编排器
+### 🎼 多 Agent 任务编排（含自动续步 loop）
 
 自然语言目标 → 自动拆解 → 子 Agent 执行 → 验收 → 返工/人工裁决 → 自动续步：
+
+<p align="center"><img src="docs/screenshots/orch.png" width="760" alt="任务编排面板"/></p>
 
 - planner 固定走 complex 路由（不来回切模型），拆解为带依赖的步骤图
 - Worker 适配器：hermes(`-z`)、codex(`exec`)、devin(`-p`)，各家 CLI 登录后即用
 - 验收失败自动返工（≤3 轮）；仍失败转入 **awaiting_review 人工裁决**：通过 / 再返工 / 终止，24h 超时自动终止
-- **自动续步**：任务完成后自动规划下一步优化（上限可配），实现"目标驱动的持续保活"
+- **自动续步 loop**：任务完成后自动规划下一步优化（上限可配），实现"目标驱动的持续保活"
 - 并行派发（默认 2 并发）、正反辩论模式（needsDebate）、状态持久化重启不丢
+
+### 🔌 MCP 网关 / Skill 统一生态
+
+<p align="center"><img src="docs/screenshots/mcp.png" width="760" alt="MCP 服务面板"/></p>
+
+- **MCPHub 网关**：各 Agent 配置的 MCP 自动扫描、导入 MCPHub，所有 Agent 共享一套工具；`http://localhost:3000/mcp` 一个地址全员接入
+- **MCP 健康监控**：故障自动修复 / macOS 通知告警
+- **Skill 同步**：全量 symlink 铺到每个 Agent 的原生目录，Skill 市场一键安装，跨 Agent 会话桥可读取任意 Agent 历史
+- **Agent 体检**：自动检测本机 8+ 种 Agent 的 MCP/Skill 配置状态
+
+<p align="center"><img src="docs/screenshots/skills.png" width="760" alt="已安装 Skills 面板"/></p>
 
 ### 📊 用量看板与巡检日报
 
 - **今日用量下钻**：点 simple/coding/complex/expert 看具体用了哪个服务商的哪个模型；一键切换「服务商视图」按上游聚合
 - **7 天趋势图**：各路线堆叠柱状图，失败数标红
-- **上游余额**：Reverix 累计消耗、WorkBuddy 账号额度、火山欠费推断
+- **上游余额**：各上游累计消耗与账号额度一目了然
 - **每日巡检日报**：launchd 每天 21:00 自动汇总 24h 路由分布/失败/余额，让 complex 模型产出不超过 8 条优化建议，macOS 通知提醒——**系统自己会体检并告诉你哪里该优化**
-
-### 🔌 MCP / Skill 统一生态
-
-- 各 Agent 配置的 MCP 自动扫描、导入 MCPHub，所有 Agent 共享一套工具
-- Skill 全量 symlink 铺到每个 Agent 的原生目录，跨 Agent 会话桥可读取任意 Agent 历史
-- 事件驱动同步（fs.watch，~3 秒），MCP 健康监控 + 故障自动修复/通知
 
 ### 💓 保活
 
@@ -132,7 +143,7 @@ cp router/config.example.json ~/.hermes/router/config.json
 node router/router.mjs &   # 或自行用 launchd/systemd 托管
 ```
 
-然后在 UI「自动路由 → Agent 接入」一键把 Hermes 切到自动路由；其他 Agent 把 Base URL 改为 `http://127.0.0.1:3100/px/router/v1`（经反代）或 `http://127.0.0.1:8788/v1`（直连）即可。
+然后在 UI「自动路由 → Agent 接入」一键把 Hermes 切到自动路由；其他 Agent 把 Base URL 改为 `http://127.0.0.1:3100/px/router/v1`（经反代）或 `http://127.0.0.1:8788/v1`（直连）即可。标签页支持 hash 直达，如 `http://localhost:3100/#router`。
 
 ---
 
@@ -195,6 +206,9 @@ tools/
   wb-cred-sync.js       # WorkBuddy 凭据→MCPHub 注入（可选）
 launchd/                # launchd plist 模板
 config.example.json     # 主配置模板
+docs/
+  assets/               # README banner 与架构图
+  screenshots/          # 各功能面板截图
 ```
 
 ## launchd 服务
