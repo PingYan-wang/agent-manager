@@ -12,6 +12,8 @@ Agent Manager ships a built-in MCP server **agent-bridge** (`tools/agent-bridge/
 
 | Tool | Purpose |
 |---|---|
+| `reuse_lookup` | **Check before acting**: one-shot search across other agents' conversations + shared memory + installed skills + past orchestrator tasks; returns ranked hits and `follow_up` actions so agents reuse prior solutions instead of starting over. Params `query`, optional `limit`/`sources`/**`agent`**/**`scope`** (`self`/`others`/`all` — reuse your own agent's past sessions vs other agents'); REST `GET /reuse?q=...&agent=...&scope=...` |
+  - Conversation search supports fuzzy recall: partial Chinese works (e.g. "架构" matches "架构图"), English is case/order-insensitive — short fragments are enough.
 | `agents_list` | List agents on this machine with readable session records (Hermes / Devin / Codex / WorkBuddy) |
 | `conversations_list` | List recent conversations of a given agent (id / title / time) |
 | `conversation_read` | Read the full content of a conversation (id supports prefix matching) |
@@ -38,7 +40,30 @@ Codex → conversation_read(agent="hermes", id="...") → get full context, keep
 
 ## How Agents Learn About This Capability
 
-The built-in Skill `skills/agent-ecosystem` is synced to every agent's native skill directory. It tells agents: "do not assume you can only see the current conversation" — when you encounter references like "before / last time / another conversation", search first and then answer.
+Two paths, and missing either one leaks:
+
+**1. Native instruction / memory injection** (applies automatically every session). On startup and after every agent scan, Agent Manager writes these capabilities into each **installed** agent's native persistent entry point, maintaining a managed block (`[agent-manager:begin]` … `[agent-manager:end]`):
+
+| Agent | Entry file | Scope |
+|---|---|---|
+| Codex | `~/.codex/AGENTS.md` | global |
+| Devin | `~/.config/devin/AGENTS.md`, `~/.config/devin/rules/agent-ecosystem.md` | global |
+| Claude Code | `~/.claude/CLAUDE.md` | global |
+| Gemini CLI | `~/.gemini/GEMINI.md` | global |
+| Windsurf | `~/.codeium/windsurf/memories/global_rules.md` | global |
+| WorkBuddy | `~/.workbuddy/AGENTS.md` | global |
+| Cursor | `~/.cursor/rules/agent-ecosystem.mdc` | project directories only (user-level rules live in Cursor's own settings store) |
+| Hermes | one `[agent-manager]` entry in `~/.hermes/memories/MEMORY.md` | global (injected every turn) |
+
+Rules:
+
+- Only agents the scanner reports as **installed**, and only when their config directory already exists — nothing is created for agents you do not have.
+- Idempotent: repeated startups only update the managed block, never touch content you wrote in the same file, and never stack duplicate sections.
+- The managed block uses plain-text delimiters instead of HTML comments — a comment containing words like `system` gets the whole block replaced with `[BLOCKED]` by Hermes' injection scanner, which makes it worthless.
+- The block only states verifiable facts (panel URL, gateway URL, how to search), and **never claims "already connected / already synced"**; actual connection status is whatever each agent's own MCP tool list shows.
+- Inspect state: `GET /api/ecosystem/bootstrap` returns `detected / installed / stale / effective` per entry; `POST` on the same path forces a re-reconcile.
+
+**2. Built-in Skill**: `skills/agent-ecosystem` is synced to every agent's native skill directory. It tells agents: "do not assume you can only see the current conversation" — when you encounter references like "before / last time / another conversation", search first and then answer.
 
 ## Related
 

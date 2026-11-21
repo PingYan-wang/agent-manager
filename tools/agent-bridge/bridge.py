@@ -219,8 +219,30 @@ def _snippet(text, q, span=80):
 def _like_pat(q):
     return "%" + q.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_") + "%"
 
+def _fts_literal(q):
+    """把用户查询转成 FTS5 trigram 安全的字符串：中文切 2 字片段、ASCII 按词，全部 OR，禁用 FTS 语法字符。"""
+    import re
+    text = str(q).replace('"', ' ').replace("'", ' ')
+    # 提取 ASCII 词与 CJK 连续串
+    tokens = re.findall(r'[A-Za-z0-9_]+|[\u4e00-\u9fff]+', text)
+    pieces = []
+    for tok in tokens:
+        if re.match(r'^[A-Za-z0-9_]+$', tok):
+            pieces.append(tok)
+        else:
+            # 中文：整串(<=4) 或每 2 字一片，最多 6 片
+            if len(tok) <= 4:
+                pieces.append(tok)
+            else:
+                pieces.extend(tok[i:i+2] for i in range(0, min(len(tok)-1, 12), 2))
+    pieces = [p for p in pieces if p][:8]
+    return " OR ".join('"%s"' % p.replace('"', '') for p in pieces)
+
+
 def hermes_search(query, limit):
+    """混合召回：精确 LIKE（保留原行为）+ FTS5 trigram（容忍中文片段/大小写/词序），按会话聚合去重。"""
     db = _ro_db(HOME / ".hermes/state.db")
+    hits = {}  # session_id -> {title, matches, last_at}
     try:
         pat = _like_pat(query)
         rows = db.execute(
@@ -228,11 +250,30 @@ def hermes_search(query, limit):
             "from messages m join sessions s on s.id = m.session_id "
             "where m.content like ? escape '\\' or coalesce(s.title,'') like ? escape '\\' "
             "   or coalesce(s.display_name,'') like ? escape '\\' "
-            "group by m.session_id order by max(m.timestamp) desc limit ?",
-            (pat, pat, pat, limit)).fetchall()
+            "group by m.session_id", (pat, pat, pat)).fetchall()
+        for sid, title, cnt, ts in rows:
+            hits[sid] = {"id": sid, "title": title or sid[:24], "matches": cnt, "last_at": ts}
+        # FTS 兜底：只在 DB 有 messages_fts 时尝试，任何错误都静默降级到 LIKE 结果
+        try:
+            fts_q = _fts_literal(query)
+            if fts_q:
+                frows = db.execute(
+                    "select m.session_id, coalesce(s.title, s.display_name, s.session_key), count(*), max(m.timestamp) "
+                    "from messages_fts f join messages m on m.id = f.rowid "
+                    "join sessions s on s.id = m.session_id "
+                    "where messages_fts match ? group by m.session_id", (fts_q,)).fetchall()
+                for sid, title, cnt, ts in frows:
+                    if sid in hits:
+                        hits[sid]["matches"] += cnt  # 两种召回都命中，提高权重
+                        hits[sid]["last_at"] = max(hits[sid]["last_at"] or 0, ts or 0)
+                    else:
+                        hits[sid] = {"id": sid, "title": title or sid[:24], "matches": cnt, "last_at": ts}
+        except sqlite3.Error:
+            pass
     finally:
         db.close()
-    return [{"id": r[0], "title": r[1] or r[0][:24], "matches": r[2], "last_at": r[3]} for r in rows]
+    out = sorted(hits.values(), key=lambda h: (h["matches"], h["last_at"] or 0), reverse=True)
+    return out[:limit]
 
 def devin_search(query, limit):
     res = []
@@ -309,6 +350,182 @@ def workbuddy_search(query, limit):
     return res
 
 SEARCH_FNS = {"hermes": hermes_search, "devin": devin_search, "codex": codex_search, "workbuddy": workbuddy_search}
+
+# ---------- unified reuse lookup ----------
+# 一次搜索四个来源：会话 / 共享记忆 / 已装 skill / 过往编排任务。
+# 目的：让 Agent 动手前先看到"别人是否解决过 / 有没有现成 skill"，避免重复劳动。
+SKILL_ROOTS = [
+    HOME / ".agents/skills", HOME / ".hermes/skills", HOME / ".codex/skills",
+    HOME / ".claude/skills", HOME / ".config/devin/skills", HOME / ".workbuddy/skills",
+    HOME / ".codeium/windsurf/skills", HOME / ".gemini/skills",
+]
+ORCH_STATE = HOME / ".agent-manager" / "orchestrator.json"
+_REUSE_SCAN_CAP = 3000   # 每个来源最多扫这么多个文件/条目，防止大目录拖慢
+
+def _skill_list():
+    skills, seen = [], set()
+    for root in SKILL_ROOTS:
+        if not root.exists():
+            continue
+        try:
+            paths = list(root.glob("*/SKILL.md"))[:_REUSE_SCAN_CAP]
+        except Exception:
+            continue
+        for f in paths:
+            name = f.parent.name
+            if name in seen:
+                continue
+            seen.add(name)
+            desc = ""
+            try:
+                for line in f.read_text(errors="replace").splitlines()[:30]:
+                    if line.lower().startswith("description:"):
+                        desc = line.split(":", 1)[1].strip().strip('"\''); break
+            except Exception:
+                pass
+            skills.append({"name": name, "description": desc[:200], "path": str(f), "source": str(root)})
+    return skills
+
+def _orch_tasks():
+    try:
+        d = json.loads(ORCH_STATE.read_text(errors="replace"))
+    except Exception:
+        return []
+    out = []
+    for t in (d.get("tasks") or [])[-_REUSE_SCAN_CAP:]:
+        steps = t.get("plan") or []
+        out.append({
+            "id": t.get("id"), "goal": t.get("goal"), "status": t.get("status"),
+            "summary": str(t.get("summary") or "")[:500],
+            "steps": [{"title": s.get("title"), "result": str(s.get("result") or "")[:300]} for s in steps[:20]],
+            "updatedAt": t.get("updatedAt"),
+        })
+    return out
+
+def _norm(s):
+    return " ".join(str(s or "").lower().split())
+
+def _score(text, terms):
+    t = _norm(text)
+    return sum(1 for term in terms if term and term in t)
+
+def reuse_lookup(args):
+    query = str(args.get("query") or "").strip()
+    if not query:
+        return _err("query 不能为空")
+    limit = max(1, min(int(args.get("limit", 8)), 30))
+    sources = args.get("sources") or ["conversations", "memory", "skills", "tasks"]
+    if not isinstance(sources, list):
+        sources = ["conversations", "memory", "skills", "tasks"]
+    # 同一个 Agent 的复用：agent=我是谁；scope=self|others|all（默认 all）
+    me = str(args.get("agent") or "").strip().lower() or None
+    scope = str(args.get("scope") or "all").strip().lower()
+    if scope not in ("self", "others", "all"):
+        scope = "all"
+
+    def _origin(owner):
+        if not me or not owner:
+            return "unknown"
+        return "self" if str(owner).lower() == me else "other"
+
+    def _keep(owner):
+        o = _origin(owner)
+        if scope == "self":
+            return o == "self"
+        if scope == "others":
+            return o != "self"
+        return True
+    # 分词：空白/连字符分词 + CJK 二元组，让中文查询（常被整串传入）也能命中
+    nq = _norm(query)
+    terms = [w for w in nq.replace("-", " ").replace("_", " ").split() if len(w) >= 2]
+    cjk = "".join(ch for ch in nq if "\u4e00" <= ch <= "\u9fff")
+    terms += [cjk[i:i+2] for i in range(len(cjk) - 1)]
+    # 去重保序，控制规模
+    seen_terms, uniq = set(), []
+    for w in terms:
+        if w not in seen_terms:
+            seen_terms.add(w); uniq.append(w)
+    terms = uniq[:16]
+    if not terms:
+        terms = [nq]
+    out = {"query": query, "agent": me, "scope": scope, "sources": {}, "follow_up": []}
+
+    # 1) 会话：复用现有跨 agent 搜索
+    if "conversations" in sources:
+        merged = []
+        for ag in SEARCH_FNS:
+            if not _keep(ag):
+                continue
+            for hit in SEARCH_FNS[ag](query, limit):
+                hit["agent"] = ag
+                hit["origin"] = _origin(ag)
+                merged.append(hit)
+        # self 命中加权，确保"我自己上次怎么解的"排在前面
+        merged.sort(key=lambda h: (_score(str(h.get("snippet", "")) + " " + str(h.get("title", "")), terms)
+                                   + (2 if h.get("origin") == "self" else 0)), reverse=True)
+        out["sources"]["conversations"] = merged[:limit]
+
+    # 2) 共享记忆
+    if "memory" in sources:
+        hits = []
+        for line in reversed(_memory_tail()):
+            try:
+                e = json.loads(line)
+            except Exception:
+                continue
+            owner = e.get("agent")
+            if not _keep(owner):
+                continue
+            sc = _score(" ".join([str(e.get("title", "")), str(e.get("content", "")), " ".join(e.get("tags") or [])]), terms)
+            if sc:
+                hits.append({"score": sc, "agent": owner, "origin": _origin(owner), "title": e.get("title"),
+                             "content": str(e.get("content", ""))[:500], "tags": e.get("tags"), "ts": e.get("ts")})
+        hits.sort(key=lambda h: (h["score"], h.get("ts") or 0), reverse=True)
+        out["sources"]["memory"] = hits[:limit]
+
+    # 3) 已安装 skill
+    if "skills" in sources:
+        hits = []
+        for sk in _skill_list():
+            sc = _score(sk["name"].replace("-", " ") + " " + sk["description"], terms)
+            if sc:
+                sk = dict(sk); sk["score"] = sc
+                hits.append(sk)
+        hits.sort(key=lambda h: h["score"], reverse=True)
+        out["sources"]["skills"] = hits[:limit]
+
+    # 4) 过往编排任务（别人走过的路）
+    if "tasks" in sources:
+        hits = []
+        for t in _orch_tasks():
+            blob = " ".join([str(t.get("goal") or ""), str(t.get("summary") or ""),
+                             " ".join(str(s.get("title") or "") for s in t.get("steps") or [])])
+            sc = _score(blob, terms)
+            if sc:
+                hits.append({"score": sc, "id": t.get("id"), "goal": str(t.get("goal") or "")[:200],
+                             "status": t.get("status"), "summary": t.get("summary", ""),
+                             "steps": t.get("steps", [])[:8], "updatedAt": t.get("updatedAt")})
+        hits.sort(key=lambda h: (h["score"], h.get("updatedAt") or 0), reverse=True)
+        out["sources"]["tasks"] = hits[:limit]
+
+    # 生成下一步动作，明确引导 Agent 去复用而不是重做
+    self_hits = [h for v in out["sources"].values() for h in v if h.get("origin") == "self"]
+    if self_hits:
+        out["follow_up"].append("你(%s)自己之前已解决过类似问题，优先复用自己的路径：conversation_read(agent='%s', id='%s')"
+                                % (me, me, self_hits[0].get("id", "")))
+    for c in out["sources"].get("conversations", [])[:3]:
+        if c.get("origin") == "self" and self_hits:
+            continue  # 已在上面优先提示过
+        out["follow_up"].append("conversation_read(agent='%s', id='%s') 读取原始方案再续做" % (c.get("agent"), c.get("id")))
+    for sk in out["sources"].get("skills", [])[:3]:
+        out["follow_up"].append("加载 skill '%s' 复用现成能力，不要重造" % sk["name"])
+    for t in out["sources"].get("tasks", [])[:2]:
+        out["follow_up"].append("查看编排任务 %s 的步骤/结果，复用走过的路" % t.get("id"))
+    total = sum(len(v) for v in out["sources"].values())
+    out["total_hits"] = total
+    if total == 0:
+        out["follow_up"].append("四个来源都未命中：可以动手，但完成后用 memory_save 沉淀结论供其他 Agent 复用")
+    return _text(json.dumps(out, ensure_ascii=False, indent=2))
 
 # ---------- shared memory ----------
 
@@ -415,6 +632,15 @@ def dispatch(method, params):
                  "query": {"type": "string"}, "agent": {"type": "string"},
                  "limit": {"type": "integer", "default": 10}},
                  "required": ["query"]}},
+            {"name": "reuse_lookup",
+             "description": "【触发条件·动手前先查】遇到故障/陌生项目/不确定怎么做的任务时，一次搜遍会话、共享记忆、已装 skill、过往编排任务，找出'自己或别人是否解决过、有没有现成 skill'。用 agent=我是谁 + scope=self/others/all 区分同 Agent 自己的历史与其他 Agent；拿到线索再 conversation_read / 加载 skill / 看任务详情续做，避免从零重做",
+             "inputSchema": {"type": "object", "properties": {
+                 "query": {"type": "string", "description": "要解决的目标或问题关键词"},
+                 "limit": {"type": "integer", "default": 8},
+                 "sources": {"type": "array", "items": {"type": "string"}, "description": "可选，限定来源: conversations|memory|skills|tasks"},
+                 "agent": {"type": "string", "description": "可选，我是哪个 Agent（hermes/devin/codex/workbuddy）；配合 scope 区分自己与他人"},
+                 "scope": {"type": "string", "enum": ["all", "self", "others"], "default": "all", "description": "all=自己+他人 / self=只查当前 Agent 自己的历史 / others=只查其他 Agent"}},
+                 "required": ["query"]}},
             {"name": "memory_save",
              "description": "【触发条件】完成有价值的排查/配置/结论后，把可复用的结论写入共享记忆库，供其他 Agent 或你自己的未来会话检索。一次任务只需沉淀一次",
              "inputSchema": {"type": "object", "properties": {
@@ -452,6 +678,8 @@ def dispatch(method, params):
                         merged.append(hit)
                 merged.sort(key=lambda h: h.get("last_at") or h.get("updated_at") or h.get("mtime") or 0, reverse=True)
                 return _text(json.dumps(merged[:limit], ensure_ascii=False, indent=2))
+            if name == "reuse_lookup":
+                return reuse_lookup(args)
             if name == "memory_save":
                 return memory_save(args)
             if name == "memory_search":
@@ -484,7 +712,7 @@ def _err(t):
 def http_main(port):
     """REST 模式：无 MCP 握手/鉴权的本机直调，给没有 MCP 客户端的 Agent 用。
     GET  /agents /conversations?agent=&limit= /conversation?agent=&id=&max_chars=
-         /search?q=&agent=&limit= /memory/search?q=&agent=&limit=
+         /search?q=&agent=&limit= /reuse?q=&limit=&sources= /memory/search?q=&agent=&limit=
     POST /memory/save  {"agent","title","content","tags"}
     """
     from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
@@ -511,7 +739,7 @@ def http_main(port):
             try:
                 if p in ("/", "/health"):
                     return self._send(200, {"ok": True, "service": "agent-bridge",
-                        "endpoints": ["/agents", "/conversations", "/conversation", "/search", "/memory/search", "POST /memory/save"]})
+                        "endpoints": ["/agents", "/conversations", "/conversation", "/search", "/reuse", "/memory/search", "POST /memory/save"]})
                 if p == "/agents":
                     return self._tool("agents_list", {})
                 if p == "/conversations":
@@ -522,6 +750,10 @@ def http_main(port):
                 if p == "/search":
                     return self._tool("conversations_search", {"query": q.get("q", ""), "agent": q.get("agent", ""),
                                                                "limit": int(q.get("limit", 10))})
+                if p == "/reuse":
+                    return self._tool("reuse_lookup", {"query": q.get("q", ""), "limit": int(q.get("limit", 8)),
+                                                       "sources": q.get("sources", "").split(",") if q.get("sources") else None,
+                                                       "agent": q.get("agent", ""), "scope": q.get("scope", "all")})
                 if p == "/memory/search":
                     return self._tool("memory_search", {"query": q.get("q", ""), "agent": q.get("agent", ""),
                                                         "limit": int(q.get("limit", 10))})

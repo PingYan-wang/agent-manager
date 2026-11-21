@@ -33,6 +33,8 @@ description: 本机 Agent 生态系统的统一能力入口。当用户提到其
 | 工具 | 用途 |
 |---|---|
 | `agent-bridge-agents_list` | 列出哪些 Agent 有可读的本地会话存储 |
+| `agent-bridge-reuse_lookup` | **动手前先查**：一次搜遍其他 Agent 会话 / 共享记忆 / 已装 skill / 过往编排任务，找出「别人是否解决过、有没有现成 skill」；拿到 `follow_up` 再续做，参数 `query`、可选 `limit`/`sources`/`agent`(我是谁)/`scope`(`self`=只查自己上次/`others`=只看别人/`all`=都查)；无 MCP 时 `curl "http://127.0.0.1:3199/reuse?q=关键词&agent=hermes&scope=all"` |
+  - 会话检索支持模糊召回：中文写片段即可（如「架构」命中「架构图」），英文大小写/词序不敏感，不必写全查询。
 | `agent-bridge-conversations_list` | 列某 Agent 最近会话（参数 `agent`, `limit`） |
 | `agent-bridge-conversation_read` | 读某条会话内容（参数 `agent`, `id`, `max_chars`） |
 | `agent-bridge-conversations_search` | **关键词搜索会话内容**（参数 `query`, `agent` 可选=全部, `limit`）——不确定在哪个会话时先搜它 |

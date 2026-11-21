@@ -4,15 +4,16 @@
 import http from 'node:http';
 import https from 'node:https';
 import { execFile, spawn } from 'node:child_process';
-import { readFile, readdir, stat, mkdir, symlink, realpath, lstat, writeFile, unlink, mkdtemp, cp, rm } from 'node:fs/promises';
+import { readFile, readdir, stat, mkdir, symlink, realpath, lstat, writeFile, unlink, mkdtemp, cp, rm, rename } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { watch } from 'node:fs';
 import { initOrchestrator, handleOrchestratorApi } from './orchestrator.js';
 import { config, HOME, DATA_DIR } from './config.js';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { randomBytes } from 'node:crypto';
+import { createHash, randomBytes } from 'node:crypto';
 import { containedPath, proxyRequestAllowed, readJsonBody, redactSecrets, requestAllowed } from './src/http/boundaries.js';
+import { createBootstrap } from './src/agents/bootstrap.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const PORT = config.port;
@@ -648,81 +649,32 @@ async function syncAllSkills() {
   return { sources: sources.length, targets: targets.length, created, skipped: skipped.length, cleaned, errors };
 }
 
-// ---------- Agent 底层指令注入（AGENTS.md / 全局规则） ----------
-// 在各 Agent 的持久指令文件中维护一段受管代码块，运行时始终生效；
-// 详细用法仍走 agent-ecosystem skill 按需加载，控制 token 开销。
-const ECOSYSTEM_BLOCK = `<!-- agent-ecosystem:begin -->
-## 本机 Agent 生态系统
-- MCP 统一网关 http://localhost:3000/mcp 已接入并含腾讯文档/ima/lighthouse 等 WorkBuddy MCP：工具直接可用（命名 mcp__mcphub__<服务名>__<工具>），勿重复安装同类 MCP；新装 MCP 会自动同步进网关。
-- 网关现有服务清单（名称/状态/工具数）见 ${path.join(DATA_DIR, 'gateway-catalog.md')}，不确定有没有某能力时先读它。
-- Skill 已全量同步到你的 skill 目录；缺失时提示用户在 Agent Manager (http://localhost:3100) 点「同步全部 skill」。
-- 【重要·先查后做】用户提到其他 Agent、其他项目、某个目录/仓库的来历、之前的方案或结论时，先调 MCP 工具 agent-bridge-conversations_search 按关键词搜全部 Agent 会话，命中再 agent-bridge-conversation_read 细读——不要直接去文件系统猜或从零重做；搜不到再 agent-bridge-memory_search 查共享记忆库。有价值的结论用 agent-bridge-memory_save 沉淀。agent 参数填本 Agent 名即可读自己的历史。没有 MCP 客户端时可直接 curl http://127.0.0.1:3199/search?q=关键词（免鉴权仅本机）：同等接口 /agents /conversations /conversation /memory/search，POST /memory/save 写记忆。
-- 长程任务/子 Agent 编排：详见 skill agent-ecosystem；REST API http://localhost:3100/api/orchestrator/*。
-涉及其他 Agent 对话、MCP、skill、任务编排时，先查这些能力再动手。
-<!-- agent-ecosystem:end -->`;
-
-// agentId -> 持久指令文件候选（按序写入全部存在的；目录不存在则跳过）
-const BOOTSTRAP_FILES = {
-  codex: [`${HOME}/.codex/AGENTS.md`],
-  devin: [`${HOME}/.config/devin/AGENTS.md`, `${HOME}/.config/devin/rules/agent-ecosystem.md`],
-  claude: [`${HOME}/.claude/CLAUDE.md`],
-  gemini: [`${HOME}/.gemini/GEMINI.md`],
-  windsurf: [`${HOME}/.codeium/windsurf/memories/global_rules.md`],
-  cursor: [`${HOME}/.cursor/rules/agent-ecosystem.mdc`],
-  workbuddy: [`${HOME}/.workbuddy/AGENTS.md`],
-  hermes: [`${HOME}/.hermes/AGENTS.md`],
+// ---------- Agent 底层指令/记忆注入（AGENTS.md / 全局规则 / Hermes 记忆） ----------
+// 实现见 src/agents/bootstrap.js（纯函数、可单测）；这里只做参数绑定与调度。
+const agentBootstrap = createBootstrap({
+  home: HOME,
+  dataDir: DATA_DIR,
+  port: PORT,
+  hubUrl: HUB_URL,
+  hermesHome: process.env.HERMES_HOME || `${HOME}/.hermes`,
+  scanAgents,
+});
+const ensureAgentBootstrap = agentBootstrap.ensureAgentBootstrap;
+const bootstrapStatus = agentBootstrap.bootstrapStatus;
+const scheduleBootstrap = (agents) => {
+  if (!config.startupEffects) return;   // 隔离模式下不产生跨目录写入
+  return agentBootstrap.scheduleBootstrap(agents, (changed) => {
+    console.log('[bootstrap]', changed.map((r) => `${r.agent}:${r.action}`).join(', '));
+  });
 };
-
-async function applyBootstrapToFile(fp) {
-  const BEGIN = '<!-- agent-ecosystem:begin -->';
-  const END = '<!-- agent-ecosystem:end -->';
-  let text = '';
-  try { text = await readFile(fp, 'utf8'); } catch { /* 新文件 */ }
-  const bi = text.indexOf(BEGIN), ei = text.indexOf(END);
-  if (bi !== -1 && ei !== -1 && ei > bi) {
-    const next = text.slice(0, bi) + ECOSYSTEM_BLOCK + text.slice(ei + END.length);
-    if (next === text) return 'unchanged';
-    await writeFileSafe(fp, next);
-    return 'updated';
-  }
-  const sep = text && !text.endsWith('\n') ? '\n' : '';
-  const next = text + sep + (text ? '\n' : '') + ECOSYSTEM_BLOCK + '\n';
-  await writeFileSafe(fp, next);
-  return 'installed';
-}
 
 async function writeFileSafe(fp, content) {
   await mkdir(path.dirname(fp), { recursive: true });
-  await writeFile(fp, content, 'utf8');
+  const tmp = `${fp}.tmp-${process.pid}-${Date.now()}`;
+  await writeFile(tmp, content, 'utf8');
+  await rename(tmp, fp);
 }
 
-async function bootstrapStatus() {
-  const out = [];
-  for (const [agentId, files] of Object.entries(BOOTSTRAP_FILES)) {
-    for (const fp of files) {
-      let text = '';
-      try { text = await readFile(fp, 'utf8'); } catch { /* 不存在 */ }
-      const installed = text.includes('<!-- agent-ecosystem:begin -->');
-      out.push({ agent: agentId, file: fp, exists: !!text, installed });
-    }
-  }
-  return out;
-}
-
-async function ensureAgentBootstrap() {
-  const results = [];
-  for (const [agentId, files] of Object.entries(BOOTSTRAP_FILES)) {
-    for (const fp of files) {
-      // agent 根目录都不存在才跳过（允许创建 memories/ rules/ 等子目录）
-      if (!(await exists(path.dirname(fp))) && !(await exists(path.dirname(path.dirname(fp))))) continue;
-      try {
-        const r = await applyBootstrapToFile(fp);
-        if (r !== 'unchanged') results.push(`${agentId}: ${r} ${path.basename(fp)}`);
-      } catch (e) { results.push(`${agentId}: FAIL ${path.basename(fp)} ${e.message}`); }
-    }
-  }
-  return results;
-}
 
 // 归一化为 MCPHub server config
 function toHubConfig(s) {
@@ -904,6 +856,12 @@ const LOCAL_PULLS = new Map(); // model -> {status, log}
 const MODEL_CACHE = new Map(); // provider -> {ts, data:{models,source,error}}
 
 const readRouterConfig = async () => { try { return JSON.parse(await readFile(ROUTER_CFG, 'utf8')); } catch { return null; } };
+const readRouterConfigVersioned = async () => {
+  try {
+    const raw = await readFile(ROUTER_CFG, 'utf8');
+    return { config: JSON.parse(raw), revision: createHash('sha256').update(raw).digest('hex') };
+  } catch { return null; }
+};
 
 function maskConfig(cfg) {
   const out = JSON.parse(JSON.stringify(cfg));
@@ -974,9 +932,10 @@ async function pullTail(model) {
 
 const routerMgmtRoutes = [
   ['GET', /^\/api\/router\/config$/, async (req, res) => {
-    const c = await readRouterConfig();
-    if (!c) return json(res, 500, { error: 'router config not found' });
-    return json(res, 200, { config: maskConfig(c) });
+    const current = await readRouterConfigVersioned();
+    if (!current) return json(res, 500, { error: 'router config not found' });
+    res.setHeader('Cache-Control', 'no-store');
+    return json(res, 200, { config: maskConfig(current.config), revision: current.revision });
   }],
   ['PUT', /^\/api\/router\/config$/, async (req, res, body) => {
     let incoming = body;
@@ -1036,15 +995,21 @@ const routerMgmtRoutes = [
         if (Number.isFinite(v) && v >= 0) incoming.guard[k] = v; else delete incoming.guard[k];
       }
     }
-    const old = (await readRouterConfig()) || {};
+    const current = await readRouterConfigVersioned();
+    if (req.headers['if-match'] && req.headers['if-match'] !== current?.revision) {
+      return json(res, 409, { error: '磁盘路由配置已更新；请刷新配置后再保存，避免覆盖新链路' });
+    }
+    const old = current?.config || {};
     incoming = mergeConfigKeys(incoming, old);
     await mkdir(ROUTER_DIR, { recursive: true });
     await writeFile(ROUTER_CFG + '.bak-' + Date.now(), JSON.stringify(old, null, 2));
-    await writeFile(ROUTER_CFG, JSON.stringify(incoming, null, 2));
+    const savedText = JSON.stringify(incoming, null, 2);
+    await writeFileSafe(ROUTER_CFG, savedText);
     MODEL_CACHE.clear(); // 厂商地址/密钥变了，模型清单缓存作废
-    let reloaded = await reloadRouter();
-    if (!reloaded) { try { execFile('/bin/launchctl', ['kickstart', '-k', 'gui/501/ai.hermes.router']); } catch {} }
-    return json(res, 200, { ok: true, reloaded });
+    const reloaded = await reloadRouter();
+    const savedRevision = createHash('sha256').update(savedText).digest('hex');
+    if (!reloaded) return json(res, 503, { ok: false, saved: true, reloaded: false, revision: savedRevision, error: '配置已写入，但路由器热重载失败；新策略尚未生效，请重试保存' });
+    return json(res, 200, { ok: true, reloaded: true, revision: savedRevision });
   }],
   ['GET', /^\/api\/router\/classifier\/models$/, async (req, res) => {
     const c = await readRouterConfig();
@@ -1462,6 +1427,7 @@ const routes = [...routerMgmtRoutes,
       };
     } catch { /* hubFetch 不抛，但防御一下 */ }
     json(res, 200, { agents, gateway });
+    scheduleBootstrap(agents);
   }],
   ['POST', /^\/api\/agents\/import-mcp$/, async (req, res, body) => {
     const { agentId, serverName } = body || {};
@@ -1943,7 +1909,7 @@ const MIME = { '.html': 'text/html; charset=utf-8', '.js': 'text/javascript', '.
 // 任何 POST/PUT/DELETE 经本服务时整体失效，保证写后读一致。
 const GET_CACHE = new Map(); // url -> { at, data }
 const GET_CACHE_TTL = 30 * 1000;
-const CACHEABLE_GET = /^\/api\/(overview|agents|mcp\/(servers|health|keys|settings)|skills|skills\/local|router\/(status|stats|trend|balance|config|classifier\/models|local-models|model-usage|agent-apply|agents|digests)|proxy\/list|ecosystem\/bootstrap)/;
+const CACHEABLE_GET = /^\/api\/(overview|agents|mcp\/(servers|health|keys|settings)|skills|skills\/local|router\/(status|stats|trend|balance|classifier\/models|local-models|model-usage|agent-apply|agents|digests)|proxy\/list|ecosystem\/bootstrap)/;
 
 const server = http.createServer(async (req, res) => {
   const url = new URL(req.url, `http://localhost:${PORT}`);
@@ -2045,6 +2011,14 @@ async function refreshGatewayCatalog() {
 
 // 默认装配：确保 agent-bridge MCP 在网关中、内置 skill 铺到所有 agent、网关目录生成、底层指令注入
 async function ensureBuiltinInfra() {
+  // 本地注入先做：它不依赖任何网络，不能被 Hub 慢响应拖住（Hub 不可用时也要能完成接入）
+  try {
+    const r = await ensureAgentBootstrap();
+    const changed = r.filter((x) => x.action !== 'unchanged' && !String(x.action).startsWith('skipped'));
+    const skipped = r.filter((x) => String(x.action).startsWith('skipped'));
+    if (changed.length) console.log('[builtin] bootstrap:', changed.map((x) => `${x.agent}:${x.action}`).join(', '));
+    if (skipped.length) console.log('[builtin] bootstrap skipped:', skipped.map((x) => `${x.agent}:${x.action}`).join(', '));
+  } catch (e) { console.log('[builtin] bootstrap failed:', e.message); }
   try {
     const servers = await hubFetch('GET', '/servers');
     const list = servers.data?.data || [];
@@ -2067,10 +2041,6 @@ async function ensureBuiltinInfra() {
   try {
     await refreshGatewayCatalog();
   } catch (e) { console.log('[builtin] catalog failed:', e.message); }
-  try {
-    const r = await ensureAgentBootstrap();
-    if (r.length) console.log('[builtin] bootstrap:', r.join('; '));
-  } catch (e) { console.log('[builtin] bootstrap failed:', e.message); }
 }
 
 // WebSocket 升级走反代（MCP/Agent 实时通道）

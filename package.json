@@ -10,7 +10,8 @@
   "scripts": {
     "start": "node server.js",
     "check": "node --check server.js && node --check orchestrator.js && node --check config.js && node --check router/router.mjs",
-    "test:router": "node router/test/routing.test.mjs"
+    "test:router": "node router/test/routing.test.mjs",
+    "test": "node --test test/*.test.mjs"
   },
   "license": "MIT"
 }

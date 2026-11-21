@@ -33,6 +33,8 @@ Tools (prefix `agent-bridge-`):
 | Tool | Purpose |
 |---|---|
 | `agent-bridge-agents_list` | List which agents have readable local session stores |
+| `agent-bridge-reuse_lookup` | **Check before acting**: searches other agents' conversations + shared memory + installed skills + past orchestrator tasks in one call; returns hits and `follow_up` actions. Params `query`, optional `limit`/`sources`, `agent` (who I am), `scope` (`self`/`others`/`all` to reuse your own past sessions vs other agents); REST: `curl "http://127.0.0.1:3199/reuse?q=...&agent=hermes&scope=all"` |
+  - Conversation search supports fuzzy recall: partial Chinese works (e.g. "架构" matches "架构图"), English is case/order-insensitive — short fragments are enough.
 | `agent-bridge-conversations_list` | List an agent's recent conversations (params `agent`, `limit`) |
 | `agent-bridge-conversation_read` | Read a conversation's content (params `agent`, `id`, `max_chars`) |
 | `agent-bridge-conversations_search` | **Keyword search across conversation content** (params `query`, optional `agent`=all, `limit`) — search first when unsure which conversation it is in |
@@ -42,7 +44,7 @@ Tools (prefix `agent-bridge-`):
 `agent` parameter values: `hermes` / `devin` / `codex` / `workbuddy`, etc. To read **your own** history, use your own agent name (e.g. if you are Devin, pass `devin`); to read another agent's conversations, swap the name accordingly. Conversation ids support prefix matching. Content is truncated at 30000 characters by default.
 
 Typical usage:
-- **[Check before acting · most important]** When the user mentions other agents, other projects, the origin of a directory/repo, prior plans or conclusions, or the task requires reusing work someone already did — **`conversations_search` across all conversations first before acting**; don't dig/guess in the filesystem or redo work from scratch; if nothing is found, `memory_search` the shared memory store. This is the primary reason this skill exists
+- **[Check before acting · most important]** When the user mentions other agents, other projects, the origin of a directory/repo, prior plans or conclusions, or you hit a problem/strange project and are unsure how to proceed — **call `reuse_lookup` first (one call covers conversations + memory + skills + past tasks)**, follow its `follow_up` hints; use `conversations_search` only for targeted follow-up; don't dig/guess in the filesystem or redo work from scratch; if nothing is found, `memory_search` the shared memory store. This is the primary reason this skill exists
 - User says "continue that previous conversation / see what hermes talked about yesterday / what codex did last time" → `conversations_list` to find the id → `conversation_read` the content → continue working from that context
 - User says "did we research XX before / find the discussion about YY" → `conversations_search` across all agents' conversations in one shot, get agent+id, then `conversation_read` for details
 - After completing a task with reusable value → `memory_save` a note (title + conclusion + tags); any agent can later find it via `memory_search`, enabling cross-agent/cross-session memory inheritance
