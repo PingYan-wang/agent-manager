@@ -1701,6 +1701,7 @@ function renderRouterStatus(st){
   }).join('');
   $('#routerRoutes').innerHTML = rows ? `<table><tr><th>路线</th><th>模型链（主 → 备选）</th><th>上游</th></tr>${rows}</table>` : '<div class="empty">无路由配置</div>';
 }
+const ROUTE_COLORS = { simple: '#4f8cff', coding: '#3fb96b', complex: '#9b6bff', expert: '#e5534b' };
 function renderRouterStats(ss){
   if(!ss || ss.error){ $('#routerStats').innerHTML = `<div class="empty">${esc((ss&&ss.error)||'加载失败')}</div>`; return; }
   const chips = Object.entries(ss.counts||{}).map(([k,v])=>`<span class="badge">${esc(k)} × ${v}</span>`).join(' ');
@@ -1754,7 +1755,6 @@ async function routerRestart(){
   setTimeout(loadRouter, 1500);
 }
 
-const ROUTE_COLORS = { simple: '#4f8cff', coding: '#3fb96b', complex: '#9b6bff', expert: '#e5534b' };
 function renderRouterTrend(t){
   if (!t || !t.days) { $('#routerTrend').innerHTML = '<div class="empty">加载失败</div>'; return; }
   const max = Math.max(1, ...t.days.map(d => d.total || 0));
