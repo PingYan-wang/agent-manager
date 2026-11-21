@@ -183,20 +183,39 @@
   .orch-drawer .od-sub{font-size:11.5px;color:var(--muted);margin-bottom:18px}
   .orch-set-group{margin-bottom:20px}
   .orch-set-group h4{font-size:11px;color:var(--muted);letter-spacing:.08em;margin-bottom:9px;font-weight:600}
-  .orch-tree-view{flex:1;min-height:0;overflow-y:auto;padding:14px 18px;border-top:1px solid var(--line)}
-  .ot-title{font-size:11px;letter-spacing:.08em;margin-bottom:10px}
-  .ot-node{margin-bottom:2px}
-  .ot-row{display:flex;align-items:center;gap:8px;padding:5px 8px;border-radius:var(--r-sm);cursor:pointer;font-size:12.5px;border-left:3px solid transparent}
-  .ot-row:hover{background:var(--surface)}
-  .ot-row .ot-icon{width:16px;text-align:center;flex:none}
-  .ot-row .ot-label{flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
-  .ot-row .ot-status{font-size:10.5px;flex:none}
-  .ot-row.st-running{border-left-color:#3b6fd4}.ot-row.st-running .ot-status{color:#3b6fd4}
-  .ot-row.st-retrying{border-left-color:var(--warn)}.ot-row.st-retrying .ot-status{color:var(--warn)}
-  .ot-row.st-done{border-left-color:var(--ok)}.ot-row.st-done .ot-status{color:var(--ok)}
-  .ot-row.st-failed{border-left-color:var(--danger)}.ot-row.st-failed .ot-status{color:var(--danger)}
-  .ot-row.st-awaiting{border-left-color:var(--accent)}.ot-row.st-awaiting .ot-status{color:var(--accent)}
-  .ot-detail{margin:2px 0 6px 26px;padding:8px 10px;background:var(--surface);border:1px solid var(--line);border-radius:var(--r-sm);font-size:11.5px;white-space:pre-wrap;word-break:break-all;line-height:1.5}
+  /* ---- 执行树 / 计划视图（白纸 · 发丝线 · 错峰淡入 · 转圈状态点） ---- */
+  .orch-tree-view,.orch-plan-view{flex:1;min-height:0;overflow-y:auto;padding:18px 22px;border-top:1px solid var(--line);background:var(--bg,#fbf9f4)}
+  .ot-title{font-size:11px;letter-spacing:.1em;color:var(--muted);margin-bottom:14px;font-weight:600}
+  .ot-tree{position:relative}
+  .ot-kids{position:relative;margin-left:16px;padding-left:20px}
+  .ot-kids::before{content:'';position:absolute;left:0;top:8px;bottom:16px;width:1px;background:var(--line)}
+  .ot-node{position:relative;margin-bottom:4px;animation:otIn .4s ease both;animation-delay:calc(var(--i,0)*55ms)}
+  .ot-node>.ot-row::before{content:'';position:absolute;left:-20px;top:50%;width:20px;height:1px;background:var(--line)}
+  .ot-row{position:relative;display:flex;align-items:center;gap:9px;padding:7px 12px;border:1px solid var(--line);border-radius:10px;background:var(--surface);font-size:12.5px;cursor:pointer;transition:border-color .15s,box-shadow .15s}
+  .ot-row:hover{border-color:var(--line-strong);box-shadow:0 1px 4px rgba(34,30,24,.07)}
+  .ot-row .ot-dot{width:9px;height:9px;border-radius:50%;flex:none;background:var(--line-strong)}
+  .ot-row .ot-kind{font-family:var(--mono);font-size:11px;color:var(--accent);flex:none;width:16px;text-align:center}
+  .ot-row .ot-label{flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-weight:500}
+  .ot-row .ot-agent{font-family:var(--mono);font-size:10px;color:var(--muted);border:1px solid var(--line);border-radius:99px;padding:1px 7px;flex:none;max-width:110px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+  .ot-row .ot-meta{font-family:var(--mono);font-size:10px;color:var(--muted);flex:none}
+  .ot-row .ot-status{font-size:10.5px;flex:none;font-weight:600;letter-spacing:.02em}
+  .ot-row.st-pending .ot-status{color:var(--muted)}
+  .ot-row.st-running{border-color:#3b6fd4}.ot-row.st-running .ot-dot{border:2px solid rgba(59,111,212,.25);border-top-color:#3b6fd4;animation:otSpin .8s linear infinite}.ot-row.st-running .ot-status{color:#3b6fd4}
+  .ot-row.st-retrying .ot-status{color:var(--warn)}.ot-row.st-retrying .ot-dot{border:2px solid rgba(138,95,13,.3);border-top-color:var(--warn);animation:otSpin .8s linear infinite}
+  .ot-row.st-done .ot-dot{background:var(--ok)}.ot-row.st-done .ot-status{color:var(--ok)}
+  .ot-row.st-failed .ot-dot{background:var(--danger)}.ot-row.st-failed .ot-status{color:var(--danger)}
+  .ot-row.st-awaiting{border-color:var(--accent)}.ot-row.st-awaiting .ot-dot{background:var(--accent)}.ot-row.st-awaiting .ot-status{color:var(--accent)}
+  .ot-row.st-split{border-color:var(--accent)}.ot-row.st-split .ot-dot{background:var(--accent)}.ot-row.st-split .ot-status{color:var(--accent)}
+  .ot-row.st-blocked .ot-status{color:var(--warn)}.ot-row.st-blocked .ot-dot{background:var(--warn)}
+  @keyframes otIn{from{opacity:0;transform:translateY(5px)}to{opacity:1;transform:none}}
+  @keyframes otSpin{to{transform:rotate(360deg)}}
+  .ot-detail{margin:3px 0 8px 40px;padding:9px 12px;background:var(--surface);border:1px dashed var(--line);border-radius:10px;font-size:11.5px;white-space:pre-wrap;word-break:break-all;line-height:1.6;color:var(--muted);animation:otIn .3s ease both}
+  .op-list{display:flex;flex-direction:column;gap:8px}
+  .op-step{display:flex;align-items:center;gap:10px;padding:10px 14px;border:1px solid var(--line);border-radius:10px;background:var(--surface);font-size:12.5px;animation:otIn .4s ease both;animation-delay:calc(var(--i,0)*55ms)}
+  .op-step .op-id{font-family:var(--mono);font-size:10.5px;color:var(--muted);width:64px;flex:none}
+  .op-step .op-main{flex:1;min-width:0}
+  .op-step .op-title{overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+  .op-step .op-result{font-size:11px;color:var(--muted);margin-top:4px;white-space:pre-wrap;word-break:break-all}
   .orch-pool-row{display:flex;align-items:center;gap:8px;padding:5px 0;border-bottom:1px dashed var(--line);font-size:12px}
   .orch-pool-row:last-child{border-bottom:none}
   .orch-set-row{display:flex;gap:10px;align-items:flex-start;padding:8px 0;border-bottom:1px dashed var(--line)}
@@ -412,6 +431,7 @@ Dashboard:  http://localhost:3000  (账号见 MCPHub Dashboard)
           <div id="orchTaskBar" class="orch-taskbar"></div>
           <deep-chat id="orchChatEl" class="orch-chat"></deep-chat>
           <div id="orchTreeView" class="orch-tree-view" style="display:none"></div>
+          <div id="orchPlanView" class="orch-plan-view" style="display:none"></div>
           <div class="orch-composer">
             <div class="orch-composer-row">
               <select id="orchClient" title="单 Client 模式下的执行客户端（跨 Client 开启时由编排器分配）">
@@ -905,7 +925,7 @@ async function searchSkills(){
 // ---------- 任务编排（deep-chat 会话式界面） ----------
 let orchTimer = null, orchSelId = null, orchCfg = null, orchAgents = [];
 let orchChatTask = null, orchChatCount = 0, orchChatReady = false;
-const ORCH_ST = {pending:'#8d8375',planning:'#8a5f0d',running:'#2f5f8f',verifying:'#6d4a8f',done:'#2f6b3f',failed:'#9c2f21',blocked:'#9c2f21',paused:'#8d8375',awaiting_review:'#8a5f0d'};
+const ORCH_ST = {pending:'#8d8375',planning:'#8a5f0d',running:'#2f5f8f',verifying:'#6d4a8f',done:'#2f6b3f',failed:'#9c2f21',blocked:'#9c2f21',paused:'#8d8375',awaiting_review:'#8a5f0d',split:'#a93a1c',retrying:'#8a5f0d'};
 const ORCH_ST_TXT = {pending:'排队',planning:'规划中',running:'执行中',verifying:'验收中',done:'已完成',failed:'失败',blocked:'已阻塞',paused:'已暂停',awaiting_review:'待裁决'};
 const orchStColor = s => ORCH_ST[s] || '#8d8375';
 const orchTime = ts => ts ? new Date(ts).toLocaleString('zh-CN',{month:'numeric',day:'numeric',hour:'2-digit',minute:'2-digit'}) : '';
@@ -991,35 +1011,66 @@ function renderOrchComposer(){
 }
 
 let orchView='chat', orchPool=[], orchTreeTask=null; const orchTreeOpen=new Set();
-const ORCH_NODE_ICON={goal:'🎯',plan:'📋',step:'▸',verify:'✔',repair:'🔧',review:'⚖',continue:'↻'};
-const ORCH_NODE_TXT={pending:'等待',running:'执行中',retrying:'重试中',done:'完成',failed:'失败',awaiting:'待裁决',blocked:'阻塞'};
+const ORCH_NODE_ICON={goal:'🎯',plan:'📋',step:'▸',verify:'✔',repair:'🔧',review:'⚖',continue:'↻',split:'⑂'};
+const ORCH_NODE_TXT={pending:'等待',running:'执行中',retrying:'重试中',done:'完成',failed:'失败',awaiting:'待裁决',blocked:'阻塞',split:'已拆解'};
 function renderOrchTree(t){
   const box=$('#orchTreeView'); if(!box) return;
+  const show=orchView==='tree';
+  box.style.display=show?'block':'none';
   const dc=$('#orchChatEl');
-  if(orchView==='tree'){ box.style.display='block'; if(dc) dc.style.display='none'; } else { box.style.display='none'; if(dc) dc.style.display=''; }
-  if(orchView!=='tree') return;
+  if(dc) dc.style.display=(orchView==='tree'||orchView==='plan')?'none':'';
+  if(!show) return;
   orchTreeTask=t;
   const nodes=(t&&Array.isArray(t.tree))?t.tree:[];
   if(!nodes.length){ box.innerHTML='<div class="empty">暂无执行树（任务创建后自动生成）</div>'; return; }
   const byId={}; nodes.forEach(n=>byId[n.id]=n);
   const kids={}; nodes.forEach(n=>{ const p=n.parentId&&byId[n.parentId]?n.parentId:null; (kids[p]=kids[p]||[]).push(n); });
   const roots=(kids[null]||[]).slice().sort((a,b)=>(a.ts||0)-(b.ts||0));
-  const row=(n,depth)=>{
+  let seq=0;
+  const row=(n)=>{
     const st=n.status||'pending';
     const open=orchTreeOpen.has(n.id);
-    const meta=[n.attempt>1?'尝试'+n.attempt:'', n.ts?orchTime(n.ts):''].filter(Boolean).join(' · ');
-    return `<div class="ot-node" style="margin-left:${depth*18}px">
-      <div class="ot-row st-${st} ${open?'open':''}" data-act="orch-tree-node" data-id="${esc(n.id)}">
-        <span class="ot-icon">${ORCH_NODE_ICON[n.kind]||'·'}</span>
-        <span class="ot-label">${esc(n.label||n.id)}</span>
-        ${meta?`<span class="ot-meta muted" style="font-size:10.5px;flex:none">${esc(meta)}</span>`:''}
+    const i=seq++;
+    const meta=[n.attempt>1?'尝试'+n.attempt:'', n.agent||'', n.ts?orchTime(n.ts):''].filter(Boolean).join(' · ');
+    const detailTxt=[n.detail||'', meta, n.agentId?'instance: '+n.agentId:''].filter(Boolean).join('\n')||'（无详情）';
+    const inner=`
+      <div class="ot-row st-${st}" data-act="orch-tree-node" data-id="${esc(n.id)}">
+        <span class="ot-dot"></span>
+        <span class="ot-kind">${ORCH_NODE_ICON[n.kind]||'·'}</span>
+        <span class="ot-label" title="${esc(n.label||n.id)}">${esc(n.label||n.id)}</span>
+        ${n.agent?`<span class="ot-agent">${esc(n.agent)}</span>`:''}
+        ${n.ts?`<span class="ot-meta">${esc(orchTime(n.ts))}</span>`:''}
         <span class="ot-status">${ORCH_NODE_TXT[st]||st}</span>
       </div>
-      ${open?`<div class="ot-detail">${esc([n.detail||'', n.agent?('agent: '+n.agent+(n.agentId?' · '+n.agentId:'')):''].filter(Boolean).join('\n')||'（无详情）')}</div>`:''}
-      ${(kids[n.id]||[]).map(c=>row(c,depth+1)).join('')}
-    </div>`;
+      ${open?`<div class="ot-detail">${esc(detailTxt)}</div>`:''}`;
+    const childNodes=(kids[n.id]||[]).slice().sort((a,b)=>(a.ts||0)-(b.ts||0));
+    if(!childNodes.length) return `<div class="ot-node" style="--i:${i}">${inner}</div>`;
+    return `<div class="ot-node" style="--i:${i}">${inner}<div class="ot-kids">${childNodes.map(row).join('')}</div></div>`;
   };
-  box.innerHTML='<div class="ot-title muted">执行树 · 树干=编排循环（目标/计划/验收/返工/裁决/续步），分叉=子 Agent 执行 · 点击节点看详情</div>'+roots.map(n=>row(n,0)).join('');
+  box.innerHTML='<div class="ot-title muted">执行树 · 树干 = 编排循环（目标/计划/验收/返工/裁决/续步），分叉 = 子 Agent · 点击节点看详情</div><div class="ot-tree"><div class="ot-kids">'+roots.map(row).join('')+'</div></div>';
+}
+
+function renderOrchPlan(t){
+  const box=$('#orchPlanView'); if(!box) return;
+  const show=orchView==='plan';
+  box.style.display=show?'block':'none';
+  const dc=$('#orchChatEl');
+  if(show&&dc) dc.style.display='none';
+  if(!show) return;
+  orchTreeTask=t;
+  const steps=(t&&Array.isArray(t.plan))?t.plan:[];
+  if(!steps.length){ box.innerHTML='<div class="empty">暂无计划</div>'; return; }
+  const maxDepth=(typeof orchCfg!=='undefined'&&orchCfg&&orchCfg.maxDepth)||2;
+  box.innerHTML='<div class="ot-title muted">执行计划 · '+steps.length+' 步 · 递归深度上限 '+maxDepth+'</div><div class="op-list">'+steps.map((s,i)=>`
+    <div class="op-step" style="--i:${i}">
+      <span class="op-id">${esc(s.id)}</span>
+      <div class="op-main">
+        <div class="op-title">${esc(s.title||s.prompt||'')}</div>
+        ${s.result?`<div class="op-result">${esc(s.result.slice(0,300))}</div>`:''}
+      </div>
+      ${s.agent?`<span class="ot-agent">${esc(s.agent)}</span>`:''}
+      <span class="badge" style="color:${orchStColor(s.status||'pending')};border-color:${orchStColor(s.status||'pending')};flex:none">${ORCH_NODE_TXT[s.status]||s.status||'等待'}</span>
+    </div>`).join('')+'</div>';
 }
 async function orchPoolAdd(){
   const client=$('#orchPoolClient')?.value||'hermes';
@@ -1039,6 +1090,7 @@ function renderOrchTaskBar(t){
       <span class="badge" style="color:${orchStColor(t.status)};border-color:${orchStColor(t.status)}">${ORCH_ST_TXT[t.status]||t.status}</span>
       ${t.summary?`<span class="muted" style="font-size:11px;max-width:40%;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${esc(t.summary.slice(0,80))}</span>`:''}
       <button class="ghost ${orchView==='tree'?'on':''}" data-act="orch-view" data-view="tree">树</button>
+      <button class="ghost ${orchView==='plan'?'on':''}" data-act="orch-view" data-view="plan">计划</button>
       <button class="ghost ${orchView==='chat'?'on':''}" data-act="orch-view" data-view="chat">对话</button>
       <span class="sp"></span>
       <button class="ghost" data-act="orch-pause" data-id="${t.id}" ${t.status==='paused'||!active?'disabled':''}>暂停</button>
@@ -1116,6 +1168,7 @@ async function renderOrchDetail(id, forceScroll){
   if(!t) return;
   renderOrchTaskBar(t);
   renderOrchTree(t);
+  renderOrchPlan(t);
   const dc = document.getElementById('orchChatEl');
   if(!dc || !orchChatReady) return;
   const msgs = orchBuildMessages(t);
@@ -1168,6 +1221,7 @@ function renderOrchConfig(){
       ${num('maxContinuations','续步上限','自动续步最大次数','次',0,20)}
       ${num('tickSeconds','调度间隔','引擎检查周期','秒',5,120)}
       ${num('maxRepairs','返工上限','验收失败后自动返工轮数','轮',0,10)}
+      ${num('maxDepth','递归深度','子 Agent 递归拆解层数上限（苏格拉底式逐层拆解）','层',0,4)}
       <div class="orch-set-row"><div class="sr-txt"><b>单步超时</b><span class="muted">子 Agent 单步最长运行时间</span></div><span class="orch-num">分钟 <input type="number" min="1" max="60" value="${Math.round((c.dispatchTimeoutMs||0)/60000)}" onchange="orchSetNum('dispatchTimeoutMs',this.value*60000)"></span></div>
     </div>
     <div class="orch-set-group"><h4>子 Agent 池</h4>

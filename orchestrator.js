@@ -21,6 +21,7 @@ const DEFAULT_CONFIG = {
   maxConcurrent: 2,        // 同时运行的子 Agent 数
   dispatchTimeoutMs: 15 * 60 * 1000,
   maxRepairs: 3,           // 验收失败后最多返工轮数
+  maxDepth: 2,             // 递归拆解深度上限（子 Agent 发现步骤过复杂可再拆，拆到能执行为止）
   planner: {
     baseUrl: 'http://127.0.0.1:8788/v1',
     apiKey: 'hermes-local-router',
@@ -159,7 +160,8 @@ function ensureStepNode(task, step) {
   let n = nodeFind(task, id);
   if (!n) {
     const plan = planNodeFor(task);
-    n = { id, kind: 'step', parentId: plan ? plan.id : null, label: `${step.id} ${step.title || ''}`.trim(), agent: step.agent, status: 'pending', ts: Date.now() };
+    const parentId = step.parentStep && nodeFind(task, `step_${step.parentStep}`) ? `step_${step.parentStep}` : (plan ? plan.id : null);
+    n = { id, kind: 'step', parentId, label: `${step.id} ${step.title || ''}`.trim(), agent: step.agent, status: 'pending', ts: Date.now() };
     task.tree.push(n); dirty = true;
   }
   return n;
@@ -259,7 +261,12 @@ function allowedAgents() {
 
 // ---------- dispatch ----------
 function buildPrompt(step, task) {
-  return `${step.prompt}\n\n---\n背景: 这是整体任务「${task.goal}」的子任务(${step.id}: ${step.title})。工作目录: ${task.workdir}。请完成后输出清晰的结果摘要。`;
+  const depth = step.depth || 0;
+  const maxDepth = state.config.maxDepth ?? 2;
+  const splitHint = depth < maxDepth
+    ? `\n\n【递归拆解】如果你判断此步骤过于复杂、无法一次完成：先不要动手，直接输出第一行 <<<SPLIT>>>，第二行起用 JSON 给出 2-6 个更小的子步骤（格式 {"steps":[{"title":"...","prompt":"自包含提示词","agent":"hermes|codex|devin"}]}），子步骤将由子 Agent 递归执行后合并。`
+    : '';
+  return `${step.prompt}\n\n---\n背景: 这是整体任务「${task.goal}」的子任务(${step.id}: ${step.title})。工作目录: ${task.workdir}。请完成后输出清晰的结果摘要。${splitHint}`;
 }
 
 function dispatchStep(task, step, persona, agent) {
@@ -313,7 +320,7 @@ async function stepTask(task) {
       task.plan = d.steps.map((s, i) => ({
         id: s.id || `s${i + 1}`, title: s.title || `step ${i + 1}`, agent: s.agent || 'hermes',
         prompt: s.prompt || s.title || '', deps: s.deps || [], needsDebate: !!s.needsDebate,
-        status: 'pending',
+        status: 'pending', depth: 0,
       }));
       task.status = 'running';
       const pn = planNodeFor(task, true);
@@ -333,6 +340,23 @@ async function stepTask(task) {
 
   // 3) 全部终态 → 验收
   const steps = task.plan;
+  // 2.5) 递归拆解父步骤收口：子步骤全部结束后合并回父步骤（逐层整合）
+  for (const s of steps) {
+    if (s.status !== 'split') continue;
+    const children = steps.filter((c) => c.parentStep === s.id);
+    if (!children.length) { s.status = 'failed'; s.result = '拆解后无子步骤'; continue; }
+    if (children.every((c) => c.status === 'done')) {
+      s.status = 'done';
+      s.result = `由 ${children.length} 个子步骤合并：\n` + children.map((c) => `- ${c.id} ${c.title}: ${(c.result || '').slice(0, 500)}`).join('\n');
+      stepNode(task, s, { status: 'done', detail: `已合并 ${children.length} 个子步骤` });
+      log(task, 'info', `步骤 ${s.id} 子步骤全部完成，已合并`);
+    } else if (children.every((c) => ['done', 'failed'].includes(c.status)) && children.some((c) => c.status === 'failed')) {
+      s.status = 'failed';
+      s.result = `子步骤失败: ${children.filter((c) => c.status === 'failed').map((c) => c.id).join(', ')}`;
+      stepNode(task, s, { status: 'failed', detail: s.result });
+      log(task, 'warn', `步骤 ${s.id} 子步骤失败，标记失败`);
+    }
+  }
   const allDone = steps.every((s) => ['done', 'failed'].includes(s.status)) && pend.size === 0;
   if (allDone) {
     task.status = 'verifying';
@@ -438,9 +462,13 @@ async function stepTask(task) {
           stepNode(task, step, { status: 'done', detail: '辩论完成' });
         } else {
           const r = await dispatchWithRecovery(task, step, undefined, nodeId);
-          step.result = r.ok ? r.output : `FAILED(code=${r.code}): ${(r.output || r.error || '').slice(0, 4000)}`;
-          step.status = r.ok ? 'done' : 'failed';
-          stepNode(task, step, { status: step.status, detail: step.status === 'done' ? undefined : String(r.error || `exit ${r.code}`).slice(0, 200) });
+          if (r.ok && applySplit(task, step, r.output || '')) {
+            stepNode(task, step, { status: 'running', detail: `已递归拆解为子步骤（深度 ${(step.depth || 0) + 1}）` });
+          } else {
+            step.result = r.ok ? r.output : `FAILED(code=${r.code}): ${(r.output || r.error || '').slice(0, 4000)}`;
+            step.status = r.ok ? 'done' : 'failed';
+            stepNode(task, step, { status: step.status, detail: step.status === 'done' ? undefined : String(r.error || `exit ${r.code}`).slice(0, 200) });
+          }
         }
       } catch (e) {
         step.status = 'failed'; step.result = 'dispatch exception: ' + e.message;
@@ -452,6 +480,39 @@ async function stepTask(task) {
     })();
     pend.set(`${task.id}:${step.id}`, p);
   }
+}
+
+// 递归拆解：worker 输出 <<<SPLIT>>> + JSON 子步骤时，把当前步骤替换为一组子步骤（深度+1）
+function applySplit(task, step, output) {
+  const marker = output.indexOf('<<<SPLIT>>>');
+  if (marker < 0) return false;
+  let parsed = null;
+  try {
+    const raw = output.slice(marker + 11).replace(/^```(?:json)?\s*/i, '').replace(/```\s*$/,'').trim();
+    const m = raw.match(/\{[\s\S]*\}/);
+    parsed = m ? JSON.parse(m[0]) : JSON.parse(raw);
+  } catch { return false; }
+  const subs = Array.isArray(parsed?.steps) ? parsed.steps : (Array.isArray(parsed) ? parsed : null);
+  if (!subs || !subs.length) return false;
+  const depth = (step.depth || 0) + 1;
+  const maxDepth = state.config.maxDepth ?? 2;
+  if (depth > maxDepth) { log(task, 'warn', `步骤 ${step.id} 请求递归拆解但已达深度上限 ${maxDepth}，忽略`); return false; }
+  subs.forEach((s, i) => {
+    let uid = s.id || `${step.id}.${i + 1}`;
+    let k = 1; while (task.plan.find((x) => x.id === uid)) uid = `${uid}_${k++}`;
+    task.plan.push({
+      id: uid, title: s.title || uid, agent: s.agent || step.agent,
+      prompt: s.prompt || s.title || '', deps: [], needsDebate: !!s.needsDebate,
+      status: 'pending', depth, parentStep: step.id,
+    });
+  });
+  step.status = 'split';
+  step.result = undefined;
+  stepNode(task, step, { status: 'running', detail: `已递归拆解为 ${subs.length} 个子步骤（深度 ${depth}）` });
+  trunkNode(task, 'plan', `递归拆解 · ${step.title || step.id}`, { detail: `${subs.length} 个子步骤 · 深度 ${depth}`, parentId: `step_${step.id}` });
+  log(task, 'info', `步骤 ${step.id} 递归拆解为 ${subs.length} 个子步骤（深度 ${depth}）`);
+  dirty = true;
+  return true;
 }
 
 async function maybeContinue(task) {
