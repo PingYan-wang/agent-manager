@@ -1164,6 +1164,52 @@ async function skillMarket() {
   return { essential: essential.map(pub), recommended: recommended.map(pub), signals: { skills: installedNames.size, servers: gwNames.length } };
 }
 
+// 市场结果缓存：页面懒加载 + 服务启动预热，避免每次点进 tab 都重新拉社区数据
+const MCP_MKT_TTL = 10 * 60 * 1000;
+const MCP_MKT_CACHE = new Map(); // `${q}|${limit}` -> { at, data }
+const SKILL_MKT_TTL = 10 * 60 * 1000;
+let skillMktCache = { at: 0, data: null };
+
+async function mcpMarketFetch(q, limit) {
+  const u = new URL(`${MCP_REGISTRY}/v0.1/servers`);
+  u.searchParams.set('limit', String(limit));
+  if (q.length >= 3) u.searchParams.set('search', q); // 官方要求搜索词≥3字符
+  const r = await fetch(u, { signal: AbortSignal.timeout(20000) });
+  if (!r.ok) throw new Error(`Registry HTTP ${r.status}`);
+  const data = await r.json();
+  // 同名多版本去重，保留最新（_meta isLatest 优先，否则取版本号最大）
+  const byName = new Map();
+  const newer = (a, b) => String(a.version || '').localeCompare(String(b.version || ''), undefined, { numeric: true }) > 0;
+  for (const item of data.servers || []) {
+    const s = item.server || {};
+    if (!s.name) continue;
+    const cur = byName.get(s.name);
+    const isLatest = item._meta?.['io.modelcontextprotocol.registry/official']?.isLatest;
+    if (!cur || isLatest || (!cur._latest && newer(s, cur))) byName.set(s.name, { ...s, _latest: isLatest });
+  }
+  const results = [...byName.values()].map((s) => {
+    const remote = (s.remotes || []).find((r) => r.type === 'streamable-http') || (s.remotes || [])[0];
+    const pkg = (s.packages || [])[0];
+    const envRequired = (pkg?.environmentVariables || []).filter((e) => e.isRequired).map((e) => e.name);
+    return {
+      name: s.name, title: s.title || s.name, description: s.description || '',
+      version: s.version || '', homepage: s.websiteUrl || s.repository?.url || '',
+      installable: !!(remote?.url || pkg),
+      via: remote?.url ? 'remote' : pkg ? `${pkg.registryType || pkg.runtimeHint || 'stdio'}` : 'unknown',
+      envRequired,
+      _raw: { remotes: s.remotes || [], packages: (s.packages || []).slice(0, 2) },
+    };
+  });
+  return { results, total: results.length };
+}
+
+async function skillMarketCached() {
+  if (skillMktCache.data && Date.now() - skillMktCache.at < SKILL_MKT_TTL) return skillMktCache.data;
+  const data = await skillMarket();
+  skillMktCache = { at: Date.now(), data };
+  return data;
+}
+
 const routes = [...routerMgmtRoutes,
   // ---- 本地服务代理（/px/<id>/ → target） ----
   ['GET', /^\/api\/proxy\/list$/, async (req, res) => {
@@ -1430,37 +1476,14 @@ const routes = [...routerMgmtRoutes,
   ['GET', /^\/api\/mcp-market$/, async (req, res, body, m, url) => {
     const q = (url.searchParams.get('q') || '').trim();
     const limit = Math.min(Number(url.searchParams.get('limit')) || 50, 100);
+    const key = `${q}|${limit}`;
+    const hit = MCP_MKT_CACHE.get(key);
+    if (hit && Date.now() - hit.at < MCP_MKT_TTL) return json(res, 200, hit.data);
     try {
-      const u = new URL(`${MCP_REGISTRY}/v0.1/servers`);
-      u.searchParams.set('limit', String(limit));
-      if (q.length >= 3) u.searchParams.set('search', q); // 官方要求搜索词≥3字符
-      const r = await fetch(u, { signal: AbortSignal.timeout(20000) });
-      if (!r.ok) return json(res, 502, { error: `Registry HTTP ${r.status}`, results: [] });
-      const data = await r.json();
-      // 同名多版本去重，保留最新（_meta isLatest 优先，否则取版本号最大）
-      const byName = new Map();
-      const newer = (a, b) => String(a.version || '').localeCompare(String(b.version || ''), undefined, { numeric: true }) > 0;
-      for (const item of data.servers || []) {
-        const s = item.server || {};
-        if (!s.name) continue;
-        const cur = byName.get(s.name);
-        const isLatest = item._meta?.['io.modelcontextprotocol.registry/official']?.isLatest;
-        if (!cur || isLatest || (!cur._latest && newer(s, cur))) byName.set(s.name, { ...s, _latest: isLatest });
-      }
-      const results = [...byName.values()].map((s) => {
-        const remote = (s.remotes || []).find((r) => r.type === 'streamable-http') || (s.remotes || [])[0];
-        const pkg = (s.packages || [])[0];
-        const envRequired = (pkg?.environmentVariables || []).filter((e) => e.isRequired).map((e) => e.name);
-        return {
-          name: s.name, title: s.title || s.name, description: s.description || '',
-          version: s.version || '', homepage: s.websiteUrl || s.repository?.url || '',
-          installable: !!(remote?.url || pkg),
-          via: remote?.url ? 'remote' : pkg ? `${pkg.registryType || pkg.runtimeHint || 'stdio'}` : 'unknown',
-          envRequired,
-          _raw: { remotes: s.remotes || [], packages: (s.packages || []).slice(0, 2) },
-        };
-      });
-      json(res, 200, { results, total: results.length });
+      const data = await mcpMarketFetch(q, limit);
+      MCP_MKT_CACHE.set(key, { at: Date.now(), data });
+      if (MCP_MKT_CACHE.size > 50) MCP_MKT_CACHE.delete(MCP_MKT_CACHE.keys().next().value);
+      json(res, 200, data);
     } catch (e) {
       json(res, 502, { error: String(e), results: [] });
     }
@@ -1511,7 +1534,7 @@ const routes = [...routerMgmtRoutes,
     json(res, 200, { results: [], raw: r.stdout.slice(0, 2000), stderr: r.stderr.slice(0, 500) });
   }],
   ['GET', /^\/api\/skills\/market$/, async (req, res) => {
-    try { json(res, 200, await skillMarket()); }
+    try { json(res, 200, await skillMarketCached()); }
     catch (e) { json(res, 500, { error: String(e), essential: [], recommended: [] }); }
   }],
   ['GET', /^\/api\/skills\/search-sh$/, async (req, res, body, m, url) => {
@@ -1912,6 +1935,11 @@ server.listen(PORT, '127.0.0.1', () => {
   initOrchestrator().catch((e) => console.log('[orch] init failed:', e.message));
   loadProxy().then(() => console.log(`[proxy] ${proxyEntries.filter((e) => e.enabled).length} 条代理已加载`)).catch((e) => console.log('[proxy] load failed:', e.message));
   ensureBuiltinInfra().catch((e) => console.log('[builtin] failed:', e.message));
+  // 市场预热：错峰 3s 拉取，点进 tab 时直接命中缓存
+  setTimeout(() => {
+    mcpMarketFetch('', 50).then((d) => MCP_MKT_CACHE.set('|50', { at: Date.now(), data: d })).catch(() => {});
+    skillMarketCached().catch(() => {});
+  }, 3000);
 });
 
 // ===== 事件驱动自动同步 =====
